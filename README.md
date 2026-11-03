@@ -21,8 +21,7 @@ AppKit's menus. Rust, `no_std`, loaded into every app by a root daemon.
   Space choose, and Escape dismisses. Typing jumps to a matching title.
 - **Long menus** scroll with the wheel and follow the keyboard.
 
-Menus with custom item views are left to AppKit, and so is every menu in an app with
-`defaults write <bundle id> ErisMenusDisabled -bool YES`.
+Every menu in an app is left to AppKit with `defaults write <bundle id> ErisMenusDisabled -bool YES`.
 
 ## How it works
 
@@ -51,10 +50,12 @@ highlighted with `-[NSMenuBarImpl setHighlightedView:]`, and finding the titles 
 the delegate hears `menu:willHighlightItem:`. Submenus get the same lifecycle on their own impls.
 
 Getting into apps is [ErisMacInjectLib](../../libs/ErisMacInjectLib)'s job, shared with
-apple-sharpenerer: the `erismenus` daemon watches for apps of the logged-in user starting, maps
-`liberismenus.dylib` into each without dyld (so library validation never sees it) and has an arm64e
-helper start it. The payload runs on the library's `no_std` runtime, which is what makes it safe in
-arm64e apps. The Dock, login window, system UI and password managers are left alone.
+apple-sharpenerer: the `erismenus` daemon watches for the logged-in user's processes starting, maps
+`liberismenus.dylib` into each that can show a menu (apps, agents and menu bar extras, system UI,
+app extensions, AppKit's UI services) without dyld, so library validation never sees it, and has an
+arm64e helper start it. The payload runs on the library's `no_std` runtime, which is what makes it
+safe in arm64e apps. Only background processes, browser and Electron helpers, the login window, the
+password prompt and the Dock are left alone; `erismenus targets` lists the rest.
 
 `crates/core` holds everything that doesn't need AppKit: layout, placement on screen, the outline,
 springs and key-equivalent glyphs. `crates/payload` is the dylib, `crates/erismenus` the command
@@ -99,6 +100,12 @@ what the app hears back and draws each menu into a PNG in the output folder. Nam
 some (`context submenu positioning escape popup pulldown textview cancel menubar frames`), or pass `-`
 instead of the dylib to see AppKit's own menus. The payload logs to the unified log:
 `log stream --predicate 'eventMessage BEGINSWITH "[ErisMenus]"'`.
+
+## More
+
+[`docs/`](docs): how it's built (`architecture.md`), the AppKit internals it relies on
+(`appkit-internals.md`), testing and debugging (`testing.md`), and working notes for picking the
+work back up (`SCRATCHPAD.md`).
 
 ## License
 
