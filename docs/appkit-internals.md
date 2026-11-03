@@ -211,6 +211,28 @@ runs for every tooltip shown (`view` is nil for plain ones); the effect view's o
 sublayers are reset by AppKit after it, but `-[NSVisualEffectView _setClear:YES]` removes the
 material for good. `_displayTemporaryToolTipForView:withString:` shows one without hovering.
 
+### Glass panels, and how windows come on screen
+
+- Every way of ordering a window in or out (`orderFront:`, `orderFrontRegardless`,
+  `makeKeyAndOrderFront:`, `setIsVisible:`, `orderOut:`) goes through `-[NSWindow _doOrderWindow:]`
+  (an `NSWindowActivationRequestOptions`); `orderWindow:relativeTo:` misses `orderFrontRegardless`.
+  A borderless window's layers may only exist after its first display, during that call or after.
+- `[[window animator] setAlphaValue:]` calls `-[NSWindow setAlphaValue:]` once a frame.
+- Control Center (from `CGWindowListCopyWindowInfo`, which needs no Screen Recording for bounds
+  and names): its status items are its own windows at level 25 across the menu bar ("WiFi",
+  "Battery", "BentoBox-0", "Clock"); the modules open in one transparent "Control Center" window
+  at level 23, 458×1125 pt from the top of the screen, ordered out when closed. Its binary calls
+  `setAlphaValue:`, `animator`, `runAnimationGroup:completionHandler:`, `setHasShadow:`, and has a
+  SwiftUI `_BentoTransitionCoordinator`.
+- `glass_panel.rs` takes top-level glass whose shape has a rounded rect the glass's size, in a
+  borderless window at level 3 or above no wider than 60% of the screen, with its top within 48 pt
+  under the menu bar (the screen's `visibleFrame` top). Its body is a `CAShapeLayer` added last to
+  the `SDFLayer` with `zPosition` -1 (SwiftUI's sublayers keep their indices), and each of
+  SwiftUI's non-empty sublayers gets a `CAShapeLayer` mask of the same path. It opens from the
+  edge or corner under the status-bar window (level ≥ 24, in the menu bar) nearest the glass's
+  middle; the content's portal (`CAPortalLayer`) fades in. The window's `hasShadow` and
+  `animationBehavior` are turned off.
+
 Not glass, left alone: `NSVisualEffectView` materials (sidebars, HUDs), the titlebar's scroll
 pocket blur (`NSScrollPocket`, `variableBlur`), `NSLessExpensiveSubduedGlassEffectView` (a
 vibrancy view, no backdrop), Control Center's `BentoBackdrop` (a `CABackdropLayer` subclass with a

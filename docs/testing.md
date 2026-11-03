@@ -85,6 +85,7 @@ dark glass over nothing without the payload). Windows flash on screen while it r
 | Scenario | Checks |
 |---|---|
 | `glass` | `NSGlassEffectView` regular, radius 48, clear, tinted (in an inactive window) |
+| `open` | A Control Center module as it shows: a real status item, a transparent level-23 panel under it with a glass panel hanging from the menu bar, faded in by the app. Frames while it opens (`open-00` … `open-07`, `open-end`): it unrolls from the top under the item, the fade is cut short, our corners and shadow at the end |
 | `control-center` | A status-level non-activating panel like a Control Center module: a glass panel holding a `NSGlassEffectContainerView` of glass circles and two tiles merged into one shape, an accent "on" toggle, labels |
 | `popover`, `sheet`, `alert` | `NSPopover`, an `NSAlert` sheet, a modal `NSAlert` (`runModal`) |
 | `tooltip` | A real `NSToolTipPanel` (`_displayTemporaryToolTipForView:withString:`): black, rounded, light text |

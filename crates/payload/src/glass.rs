@@ -34,7 +34,7 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use crate::objc::{self, Id, Imp, NIL, Original, Sel, class, define_class, nsstring, retain, sel, swizzle};
 use crate::sys::{CGRect, gray};
-use crate::{log, msg};
+use crate::{glass_panel, log, msg};
 
 /// How deep under an `SDFLayer` its glass layers sit (three on 26.4), with room to spare.
 const MAX_DEPTH: usize = 5;
@@ -67,10 +67,10 @@ static GLASS_KEY: u8 = 0;
 const OBJC_ASSOCIATION_RETAIN_NONATOMIC: usize = 1;
 
 /// What the hooks need, made once on the main thread before any of them can run.
-struct Kit {
+pub(crate) struct Kit {
     backdrop: Id,
     sdf_layer: Id,
-    sdf_layer_class: Id,
+    pub(crate) sdf_layer_class: Id,
     output: Id,
     /// `NSGlassEffectView`, whose own glass is an `SDFLayer` in a hosting view inside it.
     glass_view: Id,
@@ -87,7 +87,7 @@ struct Kit {
 
 static KIT: AtomicPtr<Kit> = AtomicPtr::new(core::ptr::null_mut());
 
-fn kit() -> Option<&'static Kit> {
+pub(crate) fn kit() -> Option<&'static Kit> {
     let k = KIT.load(Ordering::Acquire);
     (!k.is_null()).then(|| unsafe { &*k })
 }
@@ -103,18 +103,21 @@ struct Hook {
     method: &'static CStr,
     imp: Imp,
     original: &'static Original,
+    /// Useless without the glass classes.
+    glass: bool,
 }
 
-fn hooks() -> [Hook; 3] {
+const HOOKS: usize = 5;
+
+fn hooks() -> [Hook; HOOKS] {
+    let hook = |class, method, imp, original, glass| Hook { class, method, imp, original, glass };
     [
-        Hook { class: c"SwiftUI.SDFLayer", method: c"layoutSublayers", imp: sdf_layout as Imp, original: &LAYOUT },
-        Hook { class: c"SwiftUI.SDFLayer", method: c"backdropLayer:didChangeLuma:", imp: sdf_luma as Imp, original: &LUMA },
-        Hook {
-            class: c"NSToolTipManager",
-            method: c"installContentView:forToolTip:toolTipWindow:isNew:",
-            imp: install_tooltip as Imp,
-            original: &TOOLTIP,
-        },
+        hook(c"SwiftUI.SDFLayer", c"layoutSublayers", sdf_layout as Imp, &LAYOUT, true),
+        hook(c"SwiftUI.SDFLayer", c"backdropLayer:didChangeLuma:", sdf_luma as Imp, &LUMA, true),
+        hook(c"NSToolTipManager", c"installContentView:forToolTip:toolTipWindow:isNew:", install_tooltip as Imp, &TOOLTIP, false),
+        // Panels of glass open like our menus (`glass_panel`).
+        hook(c"NSWindow", c"_doOrderWindow:", glass_panel::do_order_window as Imp, &glass_panel::ORDER, true),
+        hook(c"NSWindow", c"setAlphaValue:", glass_panel::set_alpha_value as Imp, &glass_panel::ALPHA, true),
     ]
 }
 
@@ -161,9 +164,8 @@ pub fn install() {
         log!("no SwiftUI glass classes here; glass is left alone");
     }
     let mut placed = 0;
-    for (i, hook) in hooks().iter().enumerate() {
-        // The glass hooks are useless without the kit; the tooltip one doesn't need it.
-        if i < 2 && kit().is_none() {
+    for hook in hooks() {
+        if hook.glass && kit().is_none() {
             continue;
         }
         if hook.apply() {
@@ -172,7 +174,7 @@ pub fn install() {
             log!("no -[{} {}]; that part of the glass is skipped", name(hook.class), name(hook.method));
         }
     }
-    log!("painting over glass in pid {} ({placed} of 3 hooks)", unsafe { crate::rt::getpid() });
+    log!("painting over glass in pid {} ({placed} of {HOOKS} hooks)", unsafe { crate::rt::getpid() });
     // Glass already on screen was laid out before we were here, and may not be again for a while.
     if let Some(kit) = kit() {
         objc::autoreleasing(|| repaint_windows(kit));
@@ -305,7 +307,7 @@ fn configure_as(fill: Id, cmd: Sel, layer: *mut c_void, transaction: *mut c_void
     send(fill, cmd, layer, transaction);
 }
 
-fn is_kind(obj: Id, cls: Id) -> bool {
+pub(crate) fn is_kind(obj: Id, cls: Id) -> bool {
     !obj.is_null() && !cls.is_null() && msg!(bool; obj, c"isKindOfClass:", cls => Id)
 }
 
@@ -340,8 +342,14 @@ fn restyle(kit: &Kit, sdf: Id) {
         }
     }
     if glass {
-        let body = if nested(kit, sdf) { kit.inner_effect } else { kit.body_effect };
+        let inner = nested(kit, sdf);
+        let body = if inner { kit.inner_effect } else { kit.body_effect };
         paint(kit, sdf, body, 0);
+        if inner {
+            glass_panel::undress(sdf);
+        } else {
+            glass_panel::restyle(kit, sdf);
+        }
         // Views and windows are the main thread's; layers can be laid out on others.
         if msg!(bool; class(c"NSThread"), c"isMainThread") {
             darken_owner(kit, sdf);

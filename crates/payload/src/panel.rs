@@ -125,9 +125,9 @@ impl Panel {
         let body = new_layer(c"CAShapeLayer");
         msg!((); body, c"setFillColor:", p.body => CGColorRef);
         msg!((); body, c"setShadowColor:", p.shadow => CGColorRef);
-        msg!((); body, c"setShadowOpacity:", 0.32f32 => f32);
-        msg!((); body, c"setShadowRadius:", 18.0 => f64);
-        msg!((); body, c"setShadowOffset:", CGSize { width: 0.0, height: -8.0 } => CGSize);
+        msg!((); body, c"setShadowOpacity:", style::SHADOW_OPACITY => f32);
+        msg!((); body, c"setShadowRadius:", style::SHADOW_RADIUS => f64);
+        msg!((); body, c"setShadowOffset:", CGSize { width: 0.0, height: -style::SHADOW_DROP } => CGSize);
         msg!((); root, c"addSublayer:", body => Id);
 
         let clip = new_layer(c"CALayer");

@@ -71,6 +71,14 @@ static double blueness(Shot s, NSPoint p) {
     return (q[2] - q[0]) / 255.0;
 }
 
+// Alpha (0–1) at a point in the window: transparent windows keep it in the capture.
+static double alphaAt(Shot s, NSPoint p) {
+    if (!s.px) return -1;
+    long x = lround(p.x * s.scale), y = lround((s.frame.size.height - p.y) * s.scale);
+    if (x < 0 || y < 0 || x >= (long)s.w || y >= (long)s.h) return -1;
+    return s.px[(y * s.w + x) * 4 + 3] / 255.0;
+}
+
 // The brightest pixel in a rect (window coordinates): text on a black body has to show.
 static double brightest(Shot s, NSRect r) {
     double best = 0;
@@ -174,6 +182,11 @@ static BOOL glassLoaded(void) {
     return found;
 }
 
+static void dumpTree(CALayer *l, int d) {
+    printf("%*s%s %s z=%.0f hidden=%d mask=%s anims=%s\n", d * 2, "", class_getName(l.class), NSStringFromRect(l.frame).UTF8String, l.zPosition, l.hidden, l.mask ? class_getName(l.mask.class) : "-", [[l.animationKeys componentsJoinedByString:@","] UTF8String]);
+    for (CALayer *c in l.sublayers) dumpTree(c, d + 1);
+}
+
 @interface Host : NSObject <NSApplicationDelegate>
 @property NSArray<NSString *> *scenarios;
 // Prefixes the PNG names of scenarios rerun in light mode.
@@ -238,6 +251,88 @@ static BOOL glassLoaded(void) {
         shotDone(s);
         [w close];
         next();
+    });
+}
+
+// A Control Center module the way it shows: a status item in the menu bar, and under it a big
+// transparent borderless panel (level 23, as Control Center's is) with a glass panel hanging just
+// below the menu bar, faded in by the app. With the payload it has to open like our menus: unroll
+// from the top under the status item, the fade cut short, our corners and shadow at the end.
+// Frames are captured while it opens (open-00 … open-07, open-end).
+- (void)open:(void (^)(void))next {
+    NSStatusItem *item = [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
+    item.button.image = [NSImage imageWithSystemSymbolName:@"wifi" accessibilityDescription:nil];
+    after(0.4, ^{
+        NSScreen *screen = NSScreen.mainScreen;
+        CGFloat barBottom = NSMaxY(screen.visibleFrame);
+        NSRect itemFrame = item.button.window.frame;
+        BOOL inProcess = item.button.window != nil && NSMaxY(itemFrame) > barBottom;
+        // The panel's right part under the item, as Control Center places its modules.
+        CGFloat itemMid = inProcess ? NSMidX(itemFrame) : NSMaxX(screen.frame) - 200;
+        NSRect frame = NSMakeRect(MIN(itemMid - 280, NSMaxX(screen.frame) - 400), barBottom - 400, 380, 400);
+        printf("  status item %s at x %.0f\n", inProcess ? "window in process" : "not in process", itemMid);
+        NSPanel *p = [[NSPanel alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+                                                  backing:NSBackingStoreBuffered defer:NO];
+        p.level = 23;
+        p.opaque = NO;
+        p.backgroundColor = NSColor.clearColor;
+        p.hasShadow = YES;
+        p.releasedWhenClosed = NO;
+        NSGlassEffectView *panel = glass(NSMakeRect(20, 40, 340, 354), 26, @"Wi-Fi");
+        NSGlassEffectContainerView *container = [[NSGlassEffectContainerView alloc] initWithFrame:panel.contentView.bounds];
+        NSView *tiles = [[NSView alloc] initWithFrame:container.bounds];
+        NSGlassEffectView *tile = glass(NSMakeRect(20, 20, 300, 120), 18, @"Other Networks");
+        [tiles addSubview:tile];
+        container.contentView = tiles;
+        [panel.contentView addSubview:container];
+        NSView *on = [[NSView alloc] initWithFrame:NSMakeRect(270, 290, 48, 28)];
+        on.wantsLayer = YES;
+        on.layer.backgroundColor = NSColor.systemBlueColor.CGColor;
+        on.layer.cornerRadius = 14;
+        [panel.contentView addSubview:on];
+        [p.contentView addSubview:panel];
+        // Control Center fades its windows in.
+        p.alphaValue = 0;
+        [p orderFrontRegardless];
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *c) {
+            c.duration = 0.25;
+            p.animator.alphaValue = 1;
+        }];
+        NSMutableArray *alphas = [NSMutableArray array];
+        for (int f = 0; f < 8; f++)
+            after(0.016 + f * 0.04, ^{
+                [alphas addObject:@(p.alphaValue)];
+                Shot s = shoot(p, [NSString stringWithFormat:@"open-%02d", f]);
+                if (f == 1) {
+                    double low = alphaAt(s, at(panel, 0.5, 0.15));
+                    check(low >= 0 && low < 0.5, @"early on, the bottom of the panel isn't there yet", low);
+                    double top = lum(s, at(panel, 0.5, 0.97));
+                    double topAlpha = alphaAt(s, at(panel, 0.5, 0.97));
+                    check(topAlpha > 0.9 && top < 0.06, @"early on, its top is (black, opaque)", topAlpha);
+                }
+                shotDone(s);
+            });
+        after(1.0, ^{
+            if (getenv("DUMP")) dumpTree(panel.layer, 0);
+            Shot s = shoot(p, @"open-end");
+            check(alphaAt(s, at(panel, 0.5, 0.15)) > 0.95, @"at the end the panel is all there", alphaAt(s, at(panel, 0.5, 0.15)));
+            black(s, at(panel, 0.5, 0.6), @"the panel");
+            double shadow = alphaAt(s, [panel convertPoint:NSMakePoint(170, -10) toView:nil]);
+            check(shadow > 0.04 && shadow < 0.6, @"our shadow under it", shadow);
+            // Our corner (radius 16, its arc 4.7 pt in from the corner along the diagonal) takes in a
+            // point 6.5 pt in from both edges; the glass's own (26 here, 7.6 pt in) wouldn't. The
+            // shadow is faint there, so it's the body's alpha that tells.
+            double inCorner = alphaAt(s, [panel convertPoint:NSMakePoint(6.5, 354 - 6.5) toView:nil]);
+            check(inCorner > 0.95, @"our corner radius, not the glass's", inCorner);
+            inner(s, at(tile, 0.8, 0.3), @"tile in the panel");
+            legible(s, [panel convertRect:NSMakeRect(15, 320, 80, 30) toView:nil], @"the panel");
+            double fade = [alphas.firstObject doubleValue];
+            check(fade > 0.99, @"the app's fade-in is cut short", fade);
+            shotDone(s);
+            [p close];
+            [NSStatusBar.systemStatusBar removeStatusItem:item];
+            next();
+        });
     });
 }
 
@@ -541,7 +636,7 @@ int main(int argc, char **argv) {
         Host *host = [Host new];
         NSMutableArray *names = [NSMutableArray array];
         for (int i = 3; i < argc; i++) [names addObject:@(argv[i])];
-        host.scenarios = names.count ? names : @[ @"glass", @"control-center", @"popover", @"sheet", @"alert", @"tooltip", @"button", @"tint", @"light", @"light-popover", @"light-sheet", @"dynamic" ];
+        host.scenarios = names.count ? names : @[ @"glass", @"control-center", @"open", @"popover", @"sheet", @"alert", @"tooltip", @"button", @"tint", @"light", @"light-popover", @"light-sheet", @"dynamic" ];
         NSApp.delegate = host;
         [NSApp run];
     }

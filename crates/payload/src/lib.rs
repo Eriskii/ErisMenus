@@ -17,6 +17,7 @@ extern crate alloc;
 pub(crate) use eris_inject_payload::{log, msg, objc, rt};
 
 mod glass;
+mod glass_panel;
 mod hooks;
 mod model;
 mod panel;

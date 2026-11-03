@@ -36,11 +36,13 @@ this, then `architecture.md`, `appkit-internals.md` and `testing.md`. Keep it cu
     new tag;
   - `Eriskii/ErisMonorepo` records both submodules.
 - 26 devhost scenarios pass (the default set); `menus-core` has 27 unit tests; the lib has 5.
-- **Glass** (merged from the `glass` branch, not installed yet): `glass.rs` paints all Liquid
-  Glass black (Control Center's modules, popovers, alerts, Notification Center, Spotlight, glass
-  buttons) and restyles tooltips; 12 `glasshost` scenarios pass dlopened. Unverified until
-  installed: inside the real Control Center and the other system UI (`tools/glass-e2e.sh` checks
-  the daemon path with a test app).
+- **Glass**: `glass.rs` paints all Liquid Glass black (Control Center's modules, popovers,
+  alerts, Notification Center, Spotlight, glass buttons) and restyles tooltips. Installed
+  (`bfa3261`); the user confirmed Control Center's modules render black, but said they didn't look
+  or open like our menus. → `glass_panel.rs`: glass panels hanging from the menu bar get our body
+  (corners, shadow) and our opening (unroll from under the status item, springs sampled into
+  keyframes). 13 `glasshost` scenarios pass dlopened, `open` captures the opening frame by frame;
+  not yet installed or seen in the real Control Center. Its closing is still the app's own.
 
 ## Working with this user
 
@@ -92,6 +94,12 @@ this, then `architecture.md`, `appkit-internals.md` and `testing.md`. Keep it cu
   drawn out of process; login window and SecurityAgent are skipped. Glass in light mode: SwiftUI
   glass that's only part of a window keeps dark text on the black body (AppKit glass and windows
   made of glass are fixed); the user is in dark mode.
+- **Glass panels, unverified**: whether Control Center's real module windows match `hang` (one
+  transparent "Control Center" window, level 23, 458×1125 pt from the top of the screen, seen with
+  `CGWindowListCopyWindowInfo`; the glass inside it hanging under the menu bar); whether its own
+  open animation (a `setAlphaValue:` fade, `_BentoTransitionCoordinator` in SwiftUI) is fully
+  overridden; closing like ours (a 0.12 s fade) would need the order-out held back, not done.
+  Popovers with an arrow keep their own shape (not a single rounded rect).
 - **Help menu search**: AppKit's Help menu has a search field row (not an item; see
   `appkit-internals.md`); ours has none. Would need a field in our panel that gets the keys, and
   results from the main menu's items (and help books).

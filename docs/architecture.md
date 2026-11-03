@@ -44,7 +44,13 @@ keyboard while it's open. It runs inside every app, loaded by a root daemon.
   build marker (`ErisMenusGlassBuild<time>`) and opt-out (`ErisMenusGlassDisabled`). Three hooks:
   `-[SwiftUI.SDFLayer layoutSublayers]` (all glass), `-[SwiftUI.SDFLayer backdropLayer:didChangeLuma:]`
   (adaptive glass), `-[NSToolTipManager installContentView:forToolTip:toolTipWindow:isNew:]`
-  (tooltips). How glass is drawn and what the hooks change: `appkit-internals.md`.
+  (tooltips), and two for `glass_panel.rs`. How glass is drawn and what the hooks change:
+  `appkit-internals.md`.
+- `glass_panel.rs`: glass that's a menu-like panel hanging from the menu bar (Control Center's
+  modules) gets our menu body (`style::SHADOW_*`, `Metrics` corners) under it, masks of that shape
+  on SwiftUI's layers, and our opening, sampled from `menus_core::spring` into
+  `CAKeyframeAnimation`s when its window is ordered in (`-[NSWindow _doOrderWindow:]`); an app's
+  fade-in at the same time is cut short (`-[NSWindow setAlphaValue:]`).
 - `sys.rs`: CoreGraphics geometry, paths, colors, the clock, and `Tracking`: what AppKit's
   `_setupMenuTracking` does with the window server while a menu is open (background mouse events,
   the keyboard, HIToolbox's menu tracking notifications), undone when dropped.

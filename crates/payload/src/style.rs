@@ -8,6 +8,11 @@ use crate::msg;
 use crate::objc::{Id, NIL, class, ns, nsstring, retain};
 use crate::sys::{CGColorRef, CGSize, NSRange, gray};
 
+/// The body's shadow (black, in `Palette::shadow`): how opaque, how soft, how far down.
+pub const SHADOW_OPACITY: f32 = 0.32;
+pub const SHADOW_RADIUS: f64 = 18.0;
+pub const SHADOW_DROP: f64 = 8.0;
+
 pub struct Palette {
     pub body: CGColorRef,
     pub shadow: CGColorRef,
