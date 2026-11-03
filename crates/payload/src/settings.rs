@@ -27,7 +27,16 @@ pub fn listen() {
         adopt_state();
     }
     sys::observe_darwin(NOTIFICATION, changed);
-    accent::apply(current().accent);
+    push();
+}
+
+/// The accent and the icon tint into AppKit; icons first, so the accent's refresh redraws them.
+fn push() {
+    let settings = current();
+    let icons = accent::set_icon_tint(settings.effective_icon_tint());
+    if !accent::apply(settings.accent) && icons {
+        accent::refresh();
+    }
 }
 
 fn adopt_state() {
@@ -46,5 +55,5 @@ extern "C" fn changed(_: *mut c_void, _: *const c_void, _: *const c_void, _: *co
 /// Menus, glass and the animation read the settings each time they're used; the accent is the
 /// one thing that has to be pushed into AppKit.
 extern "C" fn apply(_: *mut c_void) {
-    crate::objc::autoreleasing(|| accent::apply(current().accent));
+    crate::objc::autoreleasing(push);
 }

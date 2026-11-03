@@ -72,8 +72,6 @@ impl Delegate {
 struct State {
     path: PathBuf,
     settings: Cell<Settings>,
-    /// The last custom accent, kept while the system's is in use so turning it back on returns it.
-    last_accent: Cell<u32>,
     /// A color being dragged around the color panel goes out once it rests.
     pending: RefCell<Option<Retained<NSTimer>>>,
 }
@@ -83,17 +81,14 @@ impl State {
         let mut settings = self.settings.get();
         change(&mut settings);
         self.settings.set(settings);
-        if let Some(rgb) = settings.accent {
-            self.last_accent.set(rgb);
-        }
         if let Err(e) = config::save(&self.path, &settings) {
             eprintln!("erismenus: {e}");
         }
     }
 
-    /// The accent changes in every app (each redraws all its controls), so a color dragged
-    /// across the color panel is sent when it settles rather than at every step.
-    fn edit_accent_soon(self: &Rc<Self>, rgb: u32) {
+    /// A color reaches every app (each redraws its controls and icons), so a color dragged across
+    /// the color panel is sent when it settles rather than at every step.
+    fn edit_soon(self: &Rc<Self>, change: impl Fn(&mut Settings) + 'static) {
         if let Some(timer) = self.pending.borrow_mut().take() {
             timer.invalidate();
         }
@@ -101,7 +96,7 @@ impl State {
         let block = RcBlock::new(move |_: std::ptr::NonNull<NSTimer>| {
             if let Some(state) = me.upgrade() {
                 state.pending.borrow_mut().take();
-                state.edit(|s| s.accent = Some(rgb));
+                state.edit(&change);
             }
         });
         let timer = unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.15, false, &block) };
@@ -109,16 +104,90 @@ impl State {
     }
 }
 
+/// A color setting: a checkbox that turns it on, a color well and a hex field.
+#[derive(Clone)]
+struct ColorPicker {
+    checkbox: Retained<NSButton>,
+    well: Retained<NSColorWell>,
+    hex: Retained<NSTextField>,
+    get: fn(&Settings) -> Option<u32>,
+    set: fn(&mut Settings, Option<u32>),
+    /// The last color, kept while it's off so turning it back on returns it.
+    last: Rc<Cell<u32>>,
+}
+
+impl ColorPicker {
+    fn new(mtm: MainThreadMarker, title: &str, get: fn(&Settings) -> Option<u32>, set: fn(&mut Settings, Option<u32>), first: u32) -> Self {
+        let well = NSColorWell::colorWellWithStyle(NSColorWellStyle::Default, mtm);
+        well.widthAnchor().constraintEqualToConstant(44.0).setActive(true);
+        let hex = NSTextField::textFieldWithString(&NSString::from_str(""), mtm);
+        hex.setPlaceholderString(Some(ns_string!("#FF6B00")));
+        hex.widthAnchor().constraintEqualToConstant(90.0).setActive(true);
+        Self { checkbox: checkbox(mtm, title), well, hex, get, set, last: Rc::new(Cell::new(first)) }
+    }
+
+    fn row(&self, mtm: MainThreadMarker) -> Retained<NSView> {
+        let views: [&NSView; 2] = [&self.well, &self.hex];
+        let stack = NSStackView::stackViewWithViews(&NSArray::from_slice(&views), mtm);
+        stack.setSpacing(8.0);
+        Retained::into_super(stack)
+    }
+
+    fn show(&self, settings: &Settings) {
+        let value = (self.get)(settings);
+        if let Some(rgb) = value {
+            self.last.set(rgb);
+        }
+        let rgb = value.unwrap_or(self.last.get());
+        self.checkbox.setState(on(value.is_some()));
+        self.well.setColor(&color(rgb));
+        self.well.setEnabled(value.is_some());
+        self.hex.setStringValue(&NSString::from_str(&config::hex(rgb)));
+        self.hex.setEnabled(value.is_some());
+    }
+
+    /// The checkbox, the well and the field, each changing the setting.
+    fn connect(&self, state: &Rc<State>, show: &Rc<dyn Fn()>, connect: &mut dyn FnMut(&NSControl, Box<dyn Fn()>)) {
+        let (me, state_, show_) = (self.clone(), state.clone(), show.clone());
+        connect(
+            &self.checkbox,
+            Box::new(move || {
+                let custom = me.checkbox.state() == NSControlStateValueOn;
+                let rgb = me.last.get();
+                state_.edit(|s| (me.set)(s, custom.then_some(rgb)));
+                show_();
+            }),
+        );
+        let (me, state_) = (self.clone(), state.clone());
+        connect(
+            &self.well,
+            Box::new(move || {
+                let rgb = rgb_of(&me.well.color());
+                me.last.set(rgb);
+                me.hex.setStringValue(&NSString::from_str(&config::hex(rgb)));
+                let set = me.set;
+                state_.edit_soon(move |s| set(s, Some(rgb)));
+            }),
+        );
+        let (me, state_, show_) = (self.clone(), state.clone(), show.clone());
+        connect(
+            &self.hex,
+            Box::new(move || {
+                match parse_hex(&me.hex.stringValue().to_string()) {
+                    Some(rgb) => state_.edit(|s| (me.set)(s, Some(rgb))),
+                    None => NSBeep(),
+                }
+                show_();
+            }),
+        );
+    }
+}
+
 pub fn run(snapshot: Option<PathBuf>) -> Result<(), String> {
     let mtm = MainThreadMarker::new().ok_or("the settings window has to run on the main thread")?;
     let path = config::path()?;
     let settings = config::load(&path)?;
-    let state = Rc::new(State {
-        path,
-        settings: Cell::new(settings),
-        last_accent: Cell::new(settings.accent.unwrap_or(0xFF6B00)),
-        pending: RefCell::new(None),
-    });
+    let state = Rc::new(State { path, settings: Cell::new(settings), pending: RefCell::new(None) });
 
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
@@ -138,15 +207,19 @@ pub fn run(snapshot: Option<PathBuf>) -> Result<(), String> {
     window.setTitle(ns_string!("ErisMenus Settings"));
     unsafe { window.setReleasedWhenClosed(false) };
 
-    let custom = checkbox(mtm, "Use a custom accent color");
-    let well = NSColorWell::colorWellWithStyle(NSColorWellStyle::Default, mtm);
-    well.widthAnchor().constraintEqualToConstant(44.0).setActive(true);
-    let hex = NSTextField::textFieldWithString(&NSString::from_str(""), mtm);
-    hex.setPlaceholderString(Some(ns_string!("#FF6B00")));
-    hex.widthAnchor().constraintEqualToConstant(90.0).setActive(true);
-    let accent_views: [&NSView; 2] = [&well, &hex];
-    let accent_row = NSStackView::stackViewWithViews(&NSArray::from_slice(&accent_views), mtm);
-    accent_row.setSpacing(8.0);
+    let accent = ColorPicker::new(mtm, "Use a custom accent color", |s| s.accent, |s, c| s.accent = c, 0xFF6B00);
+    let icons = ColorPicker::new(
+        mtm,
+        "Tint icons a color of their own",
+        |s| s.icon_tint,
+        |s, c| s.icon_tint = c,
+        settings.accent.unwrap_or(0x00A0A0),
+    );
+    let icons_note = note(
+        mtm,
+        "Tinted app icons (System Settings ▸ Appearance ▸ Icon & widget style) and folders, everywhere \
+         including the Dock. Otherwise they follow the accent color.",
+    );
     let accent_note = note(
         mtm,
         "Every app takes it on at once, in place of the one in System Settings. Web page form controls \
@@ -172,9 +245,12 @@ pub fn run(snapshot: Option<PathBuf>) -> Result<(), String> {
     };
     let empty = || NSGridCell::emptyContentView(mtm);
     let rows: Vec<[Retained<NSView>; 2]> = vec![
-        [label("Accent color:"), view(&custom)],
-        [empty(), Retained::into_super(accent_row)],
+        [label("Accent color:"), view(&accent.checkbox)],
+        [empty(), accent.row(mtm)],
         [empty(), view(&accent_note)],
+        [label("Icon tint:"), view(&icons.checkbox)],
+        [empty(), icons.row(mtm)],
+        [empty(), view(&icons_note)],
         [label("Menus:"), view(&menus)],
         [label("Animation:"), view(&animation)],
         [label("Glass:"), view(&glass)],
@@ -196,16 +272,12 @@ pub fn run(snapshot: Option<PathBuf>) -> Result<(), String> {
     }
 
     let show = {
-        let (state, custom, well, hex, menus, glass, animation) =
-            (state.clone(), custom.clone(), well.clone(), hex.clone(), menus.clone(), glass.clone(), animation.clone());
+        let (state, accent, icons, menus, glass, animation) =
+            (state.clone(), accent.clone(), icons.clone(), menus.clone(), glass.clone(), animation.clone());
         move || {
             let s = state.settings.get();
-            let rgb = s.accent.unwrap_or(state.last_accent.get());
-            custom.setState(on(s.accent.is_some()));
-            well.setColor(&color(rgb));
-            well.setEnabled(s.accent.is_some());
-            hex.setStringValue(&NSString::from_str(&config::hex(rgb)));
-            hex.setEnabled(s.accent.is_some());
+            accent.show(&s);
+            icons.show(&s);
             menus.setState(on(s.menus));
             glass.setState(on(s.glass));
             animation.selectItemAtIndex(STYLES.iter().position(|style| *style == s.style).unwrap_or(0) as isize);
@@ -213,7 +285,7 @@ pub fn run(snapshot: Option<PathBuf>) -> Result<(), String> {
         }
     };
     show();
-    let show = Rc::new(show);
+    let show: Rc<dyn Fn()> = Rc::new(show);
 
     let mut actions = Vec::new();
     let mut connect = |control: &NSControl, action: Box<dyn Fn()>| {
@@ -225,46 +297,8 @@ pub fn run(snapshot: Option<PathBuf>) -> Result<(), String> {
         }
         actions.push(target);
     };
-    {
-        let (state, show, checkbox) = (state.clone(), show.clone(), custom.clone());
-        connect(
-            &custom,
-            Box::new(move || {
-                let custom = checkbox.state() == NSControlStateValueOn;
-                let rgb = state.last_accent.get();
-                state.edit(|s| s.accent = custom.then_some(rgb));
-                show();
-            }),
-        );
-    }
-    {
-        let (state, well_, hex_) = (state.clone(), well.clone(), hex.clone());
-        connect(
-            &well,
-            Box::new(move || {
-                let rgb = rgb_of(&well_.color());
-                state.last_accent.set(rgb);
-                hex_.setStringValue(&NSString::from_str(&config::hex(rgb)));
-                state.edit_accent_soon(rgb);
-            }),
-        );
-    }
-    {
-        let (state, show, field) = (state.clone(), show.clone(), hex.clone());
-        connect(
-            &hex,
-            Box::new(move || match parse_hex(&field.stringValue().to_string()) {
-                Some(rgb) => {
-                    state.edit(|s| s.accent = Some(rgb));
-                    show();
-                }
-                None => {
-                    NSBeep();
-                    show();
-                }
-            }),
-        );
-    }
+    accent.connect(&state, &show, &mut connect);
+    icons.connect(&state, &show, &mut connect);
     {
         let (state, show, checkbox) = (state.clone(), show.clone(), menus.clone());
         connect(

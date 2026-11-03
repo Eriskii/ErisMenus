@@ -8,6 +8,8 @@ use crate::spring::Style;
 pub struct Settings {
     /// The system accent color, as 0xRRGGBB, in place of the one picked in System Settings.
     pub accent: Option<u32>,
+    /// The color tinted app icons and folders take, as 0xRRGGBB; `None` follows the accent.
+    pub icon_tint: Option<u32>,
     /// Menus drawn by ErisMenus (otherwise AppKit's own).
     pub menus: bool,
     /// Liquid Glass painted over.
@@ -17,7 +19,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { accent: None, menus: true, glass: true, style: Style::Squishy }
+        Settings { accent: None, icon_tint: None, menus: true, glass: true, style: Style::Squishy }
     }
 }
 
@@ -28,6 +30,8 @@ const ACCENT_ON: u64 = 1 << 24;
 const MENUS_OFF: u64 = 1 << 25;
 const GLASS_OFF: u64 = 1 << 26;
 const STYLE_SHIFT: u32 = 27;
+const ICON_TINT_ON: u64 = 1 << 29;
+const ICON_TINT_SHIFT: u32 = 30;
 
 impl Settings {
     pub fn pack(&self) -> u64 {
@@ -41,7 +45,15 @@ impl Settings {
         if !self.glass {
             packed |= GLASS_OFF;
         }
+        if let Some(rgb) = self.icon_tint {
+            packed |= ICON_TINT_ON | (u64::from(rgb & 0xFF_FFFF) << ICON_TINT_SHIFT);
+        }
         packed | (style_index(self.style) << STYLE_SHIFT)
+    }
+
+    /// The icon tint in effect: its own color, else a custom accent; `None` leaves icons to macOS.
+    pub fn effective_icon_tint(&self) -> Option<u32> {
+        self.icon_tint.or(self.accent)
     }
 
     pub fn unpack(packed: u64) -> Option<Settings> {
@@ -50,6 +62,7 @@ impl Settings {
         }
         Some(Settings {
             accent: (packed & ACCENT_ON != 0).then_some((packed & 0xFF_FFFF) as u32),
+            icon_tint: (packed & ICON_TINT_ON != 0).then_some(((packed >> ICON_TINT_SHIFT) & 0xFF_FFFF) as u32),
             menus: packed & MENUS_OFF == 0,
             glass: packed & GLASS_OFF == 0,
             style: STYLES.get(((packed >> STYLE_SHIFT) & 3) as usize).copied().unwrap_or_default(),
@@ -110,12 +123,21 @@ mod tests {
         let all = [
             Settings::default(),
             Settings { accent: Some(0xFF6B00), ..Settings::default() },
-            Settings { accent: Some(0), menus: false, glass: false, style: Style::Standard },
-            Settings { accent: Some(0xFFFFFF), menus: true, glass: false, style: Style::Expressive },
+            Settings { accent: Some(0), icon_tint: Some(0xFFFFFF), menus: false, glass: false, style: Style::Standard },
+            Settings { accent: Some(0xFFFFFF), icon_tint: Some(0), menus: true, glass: false, style: Style::Expressive },
+            Settings { accent: None, icon_tint: Some(0x00A0A0), ..Settings::default() },
         ];
         for settings in all {
             assert_eq!(Settings::unpack(settings.pack()), Some(settings));
         }
+    }
+
+    #[test]
+    fn icons_follow_the_accent_unless_tinted_their_own_way() {
+        let accent = Settings { accent: Some(0xFF6B00), ..Settings::default() };
+        assert_eq!(accent.effective_icon_tint(), Some(0xFF6B00));
+        assert_eq!(Settings { icon_tint: Some(0x00A0A0), ..accent }.effective_icon_tint(), Some(0x00A0A0));
+        assert_eq!(Settings::default().effective_icon_tint(), None);
     }
 
     #[test]

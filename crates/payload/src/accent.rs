@@ -14,7 +14,9 @@
 //! 3. `_controlTintChanged:` again.
 //!
 //! Folders follow the accent through `-[SLSIconAppearanceConfiguration resolvedIconTintColor]`,
-//! which in Multicolor mode answers nil (blue); it answers our color instead.
+//! which in Multicolor mode answers nil (blue) when icons follow the accent; it answers the icon
+//! tint instead (its own color, or the accent). `erismenus` also gives macOS's own icon tint that
+//! color (its "other" tint), so this is the fallback, for while that's set to follow the accent.
 //!
 //! `+[NSColor controlAccentColor]` answers our color too. AppKit's controls are SwiftUI views
 //! (`_NSCoreHostingView<AppKitButton>`); AppKit hands them the accent as
@@ -38,23 +40,28 @@ const NONE: u64 = u64::MAX;
 /// back when the accent goes back to the user's.
 static BEFORE: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(core::ptr::null_mut());
 static ICON_TINT: Original = Original::new();
+/// The icon tint (retained), while there's one of ours.
+static ICON_COLOR: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(core::ptr::null_mut());
+/// What `ICON_COLOR` is: `NONE`, or 0xRRGGBB.
+static ICON_APPLIED: AtomicU64 = AtomicU64::new(NONE);
 static CONTROL_ACCENT: Original = Original::new();
 
 const ARGUMENT_DOMAIN: &core::ffi::CStr = c"NSArgumentDomain";
 const KEY: &core::ffi::CStr = c"AppleAccentColor";
 const MULTICOLOR: isize = -2;
 
-/// Makes `rgb` (0xRRGGBB) the accent in this app, or puts the user's back. Main thread.
-pub fn apply(rgb: Option<u32>) {
+/// Makes `rgb` (0xRRGGBB) the accent in this app, or puts the user's back; whether anything
+/// changed. Main thread.
+pub fn apply(rgb: Option<u32>) -> bool {
     let wanted = rgb.map_or(NONE, u64::from);
     if APPLIED.load(Ordering::Relaxed) == wanted {
-        return;
+        return false;
     }
     let proxy_class = class(c"NSSystemAppearanceProxy");
     let app = msg!(Id; class(c"NSApplication"), c"sharedApplication");
     if proxy_class.is_null() || app.is_null() || !objc::responds(app, c"_setAccentColor:") {
         log!("no way to set the accent here; it stays the one in System Settings");
-        return;
+        return false;
     }
     let previous = APPLIED.swap(wanted, Ordering::Relaxed);
     match rgb {
@@ -63,9 +70,6 @@ pub fn apply(rgb: Option<u32>) {
             let color = retain(msg!(Id; class(c"NSColor"), c"colorWithSRGBRed:green:blue:alpha:",
                 r => f64, g => f64, b => f64, 1.0 => f64));
             let old = COLOR.swap(color, Ordering::AcqRel);
-            if ICON_TINT.get().is_null() {
-                swizzle(c"SLSIconAppearanceConfiguration", c"resolvedIconTintColor", icon_tint as Imp, &ICON_TINT);
-            }
             if CONTROL_ACCENT.get().is_null() {
                 swizzle_class(c"NSColor", c"controlAccentColor", control_accent as Imp, &CONTROL_ACCENT);
             }
@@ -93,6 +97,19 @@ pub fn apply(rgb: Option<u32>) {
     }
     tint_changed(proxy_class);
     log!("accent {}", if rgb.is_some() { "set" } else { "back to the system's" });
+    true
+}
+
+/// Icons redrawn, for an icon tint change on its own: AppKit's accent refresh only redraws them
+/// when the accent changes, and they follow the icon appearance notification.
+pub fn refresh() {
+    let proxy_class = class(c"NSSystemAppearanceProxy");
+    if !proxy_class.is_null() {
+        tint_changed(proxy_class);
+    }
+    let workspace = msg!(Id; class(c"NSWorkspace"), c"sharedWorkspace");
+    let center = msg!(Id; workspace, c"notificationCenter");
+    msg!((); center, c"postNotificationName:object:", nsstring(c"NSWorkspaceIconAppearanceConfigurationDidChangeNotification") => Id, workspace => Id);
 }
 
 /// What a change in System Settings runs: AppKit forgets its accent and takes it in again.
@@ -135,10 +152,32 @@ fn multicolor(on: bool) {
     msg!((); defaults, c"setVolatileDomain:forName:", arguments => Id, nsstring(ARGUMENT_DOMAIN) => Id);
 }
 
-/// `-[SLSIconAppearanceConfiguration resolvedIconTintColor]`: folders set to follow the accent
-/// (`iconTintColorName` 0) follow ours.
+/// The icon tint, 0xRRGGBB (its own color or the accent's), or none of ours; whether it changed.
+/// Main thread.
+pub fn set_icon_tint(rgb: Option<u32>) -> bool {
+    let wanted = rgb.map_or(NONE, u64::from);
+    if ICON_APPLIED.swap(wanted, Ordering::Relaxed) == wanted {
+        return false;
+    }
+    let color = match rgb {
+        Some(rgb) => {
+            let (r, g, b) = menus_core::settings::components(rgb);
+            retain(msg!(Id; class(c"NSColor"), c"colorWithSRGBRed:green:blue:alpha:", r => f64, g => f64, b => f64, 1.0 => f64))
+        }
+        None => NIL,
+    };
+    // Never released: a getter's caller may still hold the old one (see `autoreleased`).
+    let _ = ICON_COLOR.swap(color, Ordering::AcqRel);
+    if !color.is_null() && ICON_TINT.get().is_null() {
+        swizzle(c"SLSIconAppearanceConfiguration", c"resolvedIconTintColor", icon_tint as Imp, &ICON_TINT);
+    }
+    true
+}
+
+/// `-[SLSIconAppearanceConfiguration resolvedIconTintColor]`: icons set to follow the accent
+/// (`iconTintColorName` 0) take the icon tint.
 extern "C" fn icon_tint(this: Id, cmd: Sel) -> Id {
-    let color = COLOR.load(Ordering::Acquire);
+    let color = ICON_COLOR.load(Ordering::Acquire);
     if !color.is_null() && objc::responds(this, c"iconTintColorName") && msg!(isize; this, c"iconTintColorName") == 0 {
         return autoreleased(color);
     }

@@ -35,13 +35,15 @@ pub fn load(path: &Path) -> Result<Settings, String> {
     }
 }
 
-/// Writes `settings` to `path` and sends them to every app.
+/// Writes `settings` to `path`, sends them to every app, and gives macOS's own icon tint the
+/// color (see `icons`).
 pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("can't make {}: {e}", dir.display()))?;
     }
     std::fs::write(path, render(settings)).map_err(|e| format!("can't write {}: {e}", path.display()))?;
-    publish(settings)
+    publish(settings)?;
+    crate::icons::apply(settings.effective_icon_tint())
 }
 
 pub fn publish(settings: &Settings) -> Result<(), String> {
@@ -57,12 +59,13 @@ pub fn live() -> Option<Settings> {
 pub fn set(settings: &mut Settings, key: &str, value: &str) -> Result<(), String> {
     match key {
         "accent" => settings.accent = accent(value)?,
+        "icon-tint" | "icon_tint" => settings.icon_tint = icon_tint(value)?,
         "menus" => settings.menus = on_off(value)?,
         "glass" => settings.glass = on_off(value)?,
         "animation" => {
             settings.style = Style::from_name(value).ok_or_else(|| format!("no animation {value:?}; squishy, expressive or standard"))?
         }
-        _ => return Err(format!("no setting {key:?}; accent, menus, glass or animation")),
+        _ => return Err(format!("no setting {key:?}; accent, icon-tint, menus, glass or animation")),
     }
     Ok(())
 }
@@ -71,6 +74,13 @@ fn accent(value: &str) -> Result<Option<u32>, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "system" | "off" | "none" => Ok(None),
         _ => parse_hex(value).map(Some).ok_or_else(|| format!("{value:?} isn't a hex color like #FF6B00 (or \"system\")")),
+    }
+}
+
+fn icon_tint(value: &str) -> Result<Option<u32>, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "accent" | "off" | "none" => Ok(None),
+        _ => parse_hex(value).map(Some).ok_or_else(|| format!("{value:?} isn't a hex color like #FF6B00 (or \"accent\")")),
     }
 }
 
@@ -95,6 +105,10 @@ fn render(s: &Settings) -> String {
          # picked in System Settings.\n\
          accent = \"{}\"\n\
          \n\
+         # The color tinted app icons and folders take (Tinted icons, in System Settings > Appearance):\n\
+         # a hex color, or \"accent\" to follow the accent above.\n\
+         icon_tint = \"{}\"\n\
+         \n\
          # Menus drawn by ErisMenus instead of AppKit's Liquid Glass ones.\n\
          menus = {}\n\
          \n\
@@ -105,6 +119,7 @@ fn render(s: &Settings) -> String {
          # How menus open: \"squishy\", \"expressive\" or \"standard\".\n\
          animation = \"{}\"\n",
         s.accent.map_or_else(|| "system".to_string(), hex),
+        s.icon_tint.map_or_else(|| "accent".to_string(), hex),
         s.menus,
         s.glass,
         s.style.name(),
@@ -148,8 +163,8 @@ mod tests {
     fn round_trips_through_the_file() {
         for settings in [
             Settings::default(),
-            Settings { accent: Some(0xFF6B00), menus: false, glass: true, style: Style::Expressive },
-            Settings { accent: Some(0x00A0A0), menus: true, glass: false, style: Style::Standard },
+            Settings { accent: Some(0xFF6B00), icon_tint: None, menus: false, glass: true, style: Style::Expressive },
+            Settings { accent: Some(0x00A0A0), icon_tint: Some(0x3060FF), menus: true, glass: false, style: Style::Standard },
         ] {
             assert_eq!(parse(&render(&settings)), Ok(settings));
         }
@@ -162,6 +177,8 @@ mod tests {
         assert!(!s.menus && s.glass);
         assert_eq!(s.style, Style::Standard);
         assert!(parse("accent = \"#FF6B00\"").is_ok());
+        assert_eq!(parse("icon_tint = #00A0A0").unwrap().icon_tint, Some(0x00A0A0));
+        assert_eq!(parse("icon_tint = accent").unwrap().icon_tint, None);
         assert!(parse("accent = purple").is_err());
         assert!(parse("colour = #FF6B00").is_err());
     }

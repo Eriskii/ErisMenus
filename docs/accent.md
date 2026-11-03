@@ -84,6 +84,27 @@ Not covered:
   them; System Settings would show Multicolor selected; sandboxed apps' remote open panels need
   their service process covered; an app that resets its argument domain loses the override.
 
+## The icon tint
+
+Tinted app icons (Icon & widget style: Tinted) and folders take their color from SkyLight's
+`SLSIconAppearanceConfiguration`, loaded with AppKit's `-[NSWorkspace
+currentIconAppearanceConfiguration]` and read with `+fetchCurrentIconAppearanceConfiguration`:
+`iconAppearanceTheme`, `iconTintColorName` and `otherIconTintColor` (a `CGColor`). Tint names: 0
+follows the accent, 1 is the hardware color, 2 to 9 red, orange, yellow, green, blue, purple, pink and
+gray, and **10 is "other": `otherIconTintColor`, any color**, which System Settings never offers
+(11 and up throw "Invalid tintColor"). `-save` writes `AppleIconAppearanceTintColor` and
+`AppleIconAppearanceCustomTintColor` to the global domain and posts
+`kSLSCoordinatedIconAppearanceConfigurationChangeNotificationName`, so the Dock, Finder, widgets and
+the icon renderer all follow.
+
+`erismenus` (as the user, from `set` and the settings window) gives it the icon tint, or the custom
+accent when icons follow the accent, as tint 10, and only takes back a tint 10 (to 0) when there's
+none of ours to give; a preset picked in System Settings is left alone (`crates/erismenus/src/icons.rs`).
+Inside apps, the `resolvedIconTintColor` swizzle answers the icon tint for tint 0, the fallback while
+macOS's is set to follow the accent. That fallback only redraws icons on an accent change: an icon
+tint change on its own reaches apps through macOS's notification, not ours. Not verified on screen yet
+(saving changes the user's global preference, so it wasn't done in tests).
+
 ## Patching AppKit's code (works, not needed)
 
 `vm_protect(page, RW | VM_PROT_COPY)` on AppKit's text, writing `movn x0, #1; ret` into

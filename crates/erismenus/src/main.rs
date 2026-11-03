@@ -13,6 +13,7 @@ use eris_inject::launchd::Service;
 use eris_inject::notify::Channel;
 
 mod config;
+mod icons;
 mod window;
 
 const PAYLOAD: &str = "liberismenus.dylib";
@@ -52,8 +53,8 @@ enum Command {
         #[arg(long, hide = true)]
         snapshot: Option<PathBuf>,
     },
-    /// Change a setting in every app at once, e.g. `set accent #FF6B00` (or `system`), `set menus
-    /// off`, `set glass on`, `set animation expressive`.
+    /// Change a setting in every app at once, e.g. `set accent #FF6B00` (or `system`), `set
+    /// icon-tint #00A0A0` (or `accent`), `set menus off`, `set glass on`, `set animation expressive`.
     Set { key: String, value: String },
     /// Apply the settings file after editing it by hand.
     Reload,
@@ -217,6 +218,7 @@ fn run(command: Command) -> Result<(), String> {
 fn print_settings(s: &menus_core::settings::Settings) {
     let on_off = |on: bool| if on { "on" } else { "off" };
     println!("accent:         {}", s.accent.map_or_else(|| "system (System Settings' own)".to_string(), config::hex));
+    println!("icon tint:      {}", s.icon_tint.map_or_else(|| "the accent".to_string(), config::hex));
     println!("menus:          {}", on_off(s.menus));
     println!("glass:          {}", on_off(s.glass));
     println!("animation:      {}", s.style.name());

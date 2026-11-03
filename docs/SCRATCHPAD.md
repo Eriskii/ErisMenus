@@ -20,6 +20,10 @@ this, then `architecture.md`, `appkit-internals.md` and `testing.md`. Keep it cu
     and the folder tint). Live changes verified with `tools/accenthost.m` (system → color → color
     → system), our menus highlight in it. Not covered: WebKit form controls (WebContent process),
     the Dock, out-of-process UI.
+  - Icon tint, separate from the accent (`icon_tint`): macOS's own tint set to "other" (10) with
+    our color via `SLSIconAppearanceConfiguration -save`, from `erismenus` as the user; the payload's
+    folder swizzle is the fallback. The save path was never run in tests (it writes the user's
+    global prefs, and the sandbox refused); the first real use is the user's.
   - Regression: 26 devhost scenarios and 40 glasshost checks pass; `menus off` / `glass off`
     verified with a held registration (see `testing.md`).
 - **Repos**, all public GPL-3.0-or-later, pushed, under `Eris <13102203+Eriskii@users.noreply.github.com>`:

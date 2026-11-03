@@ -43,6 +43,7 @@ reach every app at once. The same settings from a terminal:
 
 ```sh
 erismenus set accent "#FF6B00"     # any hex color; "system" for System Settings' own
+erismenus set icon-tint "#00A0A0"  # tinted app icons and folders; "accent" to follow the accent
 erismenus set menus off            # AppKit's menus again (on to come back)
 erismenus set glass off            # leave Liquid Glass alone (glass on screen stays until redrawn)
 erismenus set animation expressive # squishy (the default), expressive or standard
