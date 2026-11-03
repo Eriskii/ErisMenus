@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/erismenus", "crates/payload"]
+# The payload is no_std and built with -Zbuild-std (see the Makefile), so plain `cargo build` and
+# `cargo test` leave it out.
+default-members = ["crates/core", "crates/erismenus"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Eriskii/ErisMenus"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

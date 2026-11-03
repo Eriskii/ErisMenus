@@ -1,0 +1,13 @@
+[package]
+name = "erismenus"
+description = "Installs and runs the daemon that loads ErisMenus into every app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+eris-inject = { path = "../../../../libs/ErisMacInjectLib/crates/inject" }
+libc = "0.2"

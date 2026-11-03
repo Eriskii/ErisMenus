@@ -1,0 +1,17 @@
+[package]
+name = "payload"
+description = "The dylib that draws and tracks menus inside apps for ErisMenus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "erismenus"
+crate-type = ["cdylib"]
+test = false
+
+[dependencies]
+menus-core = { path = "../core" }
+eris-inject-payload = { path = "../../../../libs/ErisMacInjectLib/crates/payload" }

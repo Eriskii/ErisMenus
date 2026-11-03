@@ -1,0 +1,8 @@
+[package]
+name = "menus-core"
+description = "Layout, placement, springs and shapes for ErisMenus, without AppKit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
