@@ -6,9 +6,9 @@ INJECT   = $(shell $(CARGO) metadata --format-version 1 | perl -ne 'print $$1 an
 
 export MACOSX_DEPLOYMENT_TARGET := 26.0
 
-.PHONY: all payload thread cli test devhost glasshost self-test clean
+.PHONY: all payload thread cli app test devhost glasshost self-test clean
 
-all: payload thread cli
+all: payload thread cli app
 
 # One arm64 build, mapped into every app by the daemon (arm64e apps included).
 payload:
@@ -27,6 +27,14 @@ cli:
 	$(CARGO) build --release -p erismenus
 	mkdir -p $(OUT)
 	cp target/release/erismenus $(OUT)/
+
+# The settings window as an app (the same binary; opened from a bundle it shows the window).
+app: cli
+	rm -rf $(OUT)/ErisMenus.app
+	mkdir -p $(OUT)/ErisMenus.app/Contents/MacOS
+	cp resources/Info.plist $(OUT)/ErisMenus.app/Contents/
+	cp target/release/erismenus $(OUT)/ErisMenus.app/Contents/MacOS/ErisMenus
+	codesign --force --sign - $(OUT)/ErisMenus.app
 
 test:
 	$(CARGO) test

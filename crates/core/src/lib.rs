@@ -10,6 +10,7 @@ pub mod keys;
 pub mod layout;
 pub mod math;
 pub mod nav;
+pub mod settings;
 pub mod shape;
 pub mod spring;
 

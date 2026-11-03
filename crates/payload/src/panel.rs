@@ -141,7 +141,9 @@ impl Panel {
         let content = new_layer(c"CALayer");
         msg!((); clip, c"addSublayer:", content => Id);
         let highlight = new_layer(c"CALayer");
-        msg!((); highlight, c"setBackgroundColor:", p.highlight => CGColorRef);
+        // The accent, when one is set in the settings, as macOS's own menus highlight in theirs.
+        let highlight_color = crate::accent::cg_color().unwrap_or(p.highlight);
+        msg!((); highlight, c"setBackgroundColor:", highlight_color => CGColorRef);
         msg!((); highlight, c"setCornerRadius:", metrics.highlight_radius => f64);
         msg!((); highlight, c"setCornerCurve:", nsstring(c"continuous") => Id);
         msg!((); highlight, c"setOpacity:", 0.0f32 => f32);

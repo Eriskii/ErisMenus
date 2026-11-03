@@ -31,6 +31,26 @@ AppKit's menus. Rust, `no_std`, loaded into every app by a root daemon.
   Sound, …), Notification Center, Spotlight, popovers, alerts, glass buttons, SwiftUI's
   `glassEffect`. Hover tooltips get the black body too. Out of reach: the Dock's own glass and the
   menu bar itself (drawn outside apps).
+- **Any accent color**: a hex color of your choosing becomes the system accent in every app,
+  in place of Apple's presets: checkboxes, switches, sliders, default buttons, selections, focus
+  rings, folders, SwiftUI's `.tint`, and our menus' highlight. Web page form controls and the Dock
+  keep the one from System Settings. How: [`docs/accent.md`](docs/accent.md).
+
+## Settings
+
+**ErisMenus** in Applications opens the settings window; `erismenus settings` does too. Changes
+reach every app at once. The same settings from a terminal:
+
+```sh
+erismenus set accent "#FF6B00"     # any hex color; "system" for System Settings' own
+erismenus set menus off            # AppKit's menus again (on to come back)
+erismenus set glass off            # leave Liquid Glass alone (glass on screen stays until redrawn)
+erismenus set animation expressive # squishy (the default), expressive or standard
+erismenus status
+```
+
+They're kept in `~/.config/erismenus/config.toml` (`erismenus reload` after editing it by hand) and
+go to apps as the state of a Darwin notification, so sandboxed apps get them too.
 
 Every menu in an app is left to AppKit with `defaults write <bundle id> ErisMenusDisabled -bool YES`.
 `ErisMenusGlassDisabled` leaves just the glass alone.
@@ -95,8 +115,8 @@ make
 sudo target/dist/erismenus install
 ```
 
-This puts the files in `/Library/Application Support/ErisMenus`, links `erismenus` into
-`/usr/local/bin` and starts a LaunchDaemon that loads into every app as it launches. Apps already
+This puts the files in `/Library/Application Support/ErisMenus`, the settings app in
+`/Applications/ErisMenus.app`, links `erismenus` into `/usr/local/bin` and starts a LaunchDaemon that loads into every app as it launches. Apps already
 running get ErisMenus once relaunched, or right away with `sudo erismenus inject <pid>`.
 `erismenus status` says whether the daemon runs, its log is `/Library/Logs/erismenus.log`, and
 `sudo erismenus uninstall` removes it all.

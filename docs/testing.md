@@ -103,6 +103,28 @@ To leave an app's glass alone: `defaults write <bundle id> ErisMenusGlassDisable
 relaunch it (checked at install, unlike `ErisMenusDisabled`, which menus check every time; it
 turns glass off too). The log says `glass is left alone in this app`.
 
+## The accent and the other settings
+
+```sh
+clang -fobjc-arc -framework AppKit tools/accenthost.m -o target/dist/accenthost
+export HOME=/tmp/scratch-home          # so the test doesn't touch your settings file
+target/dist/erismenus set accent system
+DARK=1 target/dist/accenthost target/dist/liberismenus.dylib /tmp/acc 4 &
+sleep 3; target/dist/erismenus set accent "#FF6B00"; sleep 2; target/dist/erismenus set accent 00A0A0; wait
+```
+
+`accenthost` shows checkbox, radio, switch, default button, slider, progress bar, segmented
+control, focus ring and a folder (forced key and active, or they draw inactive gray) and captures
+them every 2 s; the frames should follow each change, and it prints `controlAccentColor`. `LIGHT=1`
+for light mode. `erismenus settings --snapshot out.png` draws the settings window offscreen.
+
+A notification's state only lasts while something is registered for it, which in real use is the
+daemon. Testing `menus off` or `glass off` with a host started after `erismenus set`, hold a
+registration meanwhile, e.g. `python3 -c "import ctypes,time; t=ctypes.c_int();
+ctypes.CDLL('/usr/lib/libSystem.B.dylib').notify_register_check(b'io.github.eriskii.erismenus.settings', ctypes.byref(t)); time.sleep(300)" &`.
+With it, `devhost` shows AppKit's menus with `menus off` and `glasshost`'s black checks fail (the
+glass is left) with `glass off`.
+
 ## End to end, through the installed daemon
 
 ```sh

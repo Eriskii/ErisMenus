@@ -15,7 +15,7 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use menus_core::layout::Anchor;
 use menus_core::nav;
-use menus_core::spring::{Animation, Style};
+use menus_core::spring::Animation;
 use menus_core::{Point, Rect};
 
 use crate::model::{self, Row};
@@ -83,7 +83,7 @@ pub fn present(impl_: Id, _view: Id, context: Id) -> bool {
         return false;
     }
     if disabled() {
-        log!("menus are off in this app (ErisMenusDisabled)");
+        log!("menus are off in this app (ErisMenusDisabled, or off in the settings)");
         return false;
     }
     let menu = msg!(Id; context, c"menu");
@@ -250,7 +250,7 @@ fn run_menu_bar(bar: Id, menu: Id, titles: Vec<Title>, start: usize, keyboard: b
     let center = msg!(Id; class(c"NSNotificationCenter"), c"defaultCenter");
     msg!((); center, c"postNotificationName:object:", nsstring(c"NSMenuDidBeginTrackingNotification") => Id, menu => Id);
     let modifiers = msg!(u64; class(c"NSEvent"), c"modifierFlags");
-    let mut session = Session::new(Style::default().animation(), modifiers);
+    let mut session = Session::new(crate::settings::current().style.animation(), modifiers);
     session.bar = Some(MenuBar { impl_: bar, titles, current: start });
     if session.open_title(start, keyboard) {
         session.track();
@@ -267,9 +267,10 @@ fn run_menu_bar(bar: Id, menu: Id, titles: Vec<Title>, start: usize, keyboard: b
     }
 }
 
-/// `defaults write <app> ErisMenusDisabled -bool YES` leaves an app's menus to AppKit.
+/// Menus turned off in the settings, or `defaults write <app> ErisMenusDisabled -bool YES` for
+/// one app: AppKit's menus.
 fn disabled() -> bool {
-    default(c"ErisMenusDisabled")
+    !crate::settings::current().menus || default(c"ErisMenusDisabled")
 }
 
 fn default(key: &core::ffi::CStr) -> bool {
@@ -332,7 +333,7 @@ fn run(impl_: Id, menu: Id, context: Id) {
     };
     let at = if button.is_empty() { align } else { Point::new(button.x, button.mid_y()) };
     let min_width = msg!(f64; context, c"minWidth").max(0.0);
-    let animation = Style::default().animation();
+    let animation = crate::settings::current().style.animation();
 
     let Some(mut root) = Panel::open(menu, rows, anchor, min_width, visible_frame(at), animation) else {
         msg!((); context, c"setMenuCanceled:", true => bool);

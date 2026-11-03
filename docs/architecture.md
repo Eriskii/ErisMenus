@@ -12,9 +12,10 @@ keyboard while it's open. It runs inside every app, loaded by a root daemon.
 |---|---|
 | `crates/core` (`menus-core`) | Everything without AppKit, `no_std`, unit-tested: row layout and columns, placement on screen (`Anchor`, `place`), the smoothed outline (`shape`), springs and the three animation styles, key-equivalent glyphs, keyboard navigation and type-select. |
 | `crates/payload` (`liberismenus.dylib`) | The code that runs inside apps, `no_std`, on ErisMacInjectLib's payload runtime. |
-| `crates/erismenus` | The command and the root daemon. |
+| `crates/erismenus` | The command, the root daemon, the settings file (`config.rs`) and the settings window (`window.rs`, also built as `ErisMenus.app`). |
 | `tools/devhost.m` | A test app that loads the dylib and drives every kind of menu. |
 | `tools/e2e.sh` | The same test app, loaded by the installed daemon instead. |
+| `tools/accenthost.m` | A test app showing every accent-colored control, captured every 2 s while `erismenus set accent` changes it. |
 | `tools/glasshost.m`, `tools/glass-e2e.sh` | A test app that puts up every kind of glass, captures it as the window server composites it and checks it's gone; dlopened or through the daemon. |
 | `../../libs/ErisMacInjectLib` | Loading into apps: the injector, the daemon loop, launchd, the payload runtime (PAC, objc, logging). Shared with apple-sharpenerer. |
 
@@ -30,6 +31,10 @@ keyboard while it's open. It runs inside every app, loaded by a root daemon.
   Each build defines a marker class `ErisMenusBuild<unix time>` (stamped by `build.rs`); a copy
   finding its own build's marker stands down, one finding only `ErisMenusLoaded` (an older build)
   hooks over it, so reinstalling updates running apps.
+- `settings.rs`: the settings (`menus_core::settings::Settings`, packed into a `u64`), read from the
+  state of the `io.github.eriskii.erismenus.settings` Darwin notification at install and whenever
+  it's posted. Menus, glass and the animation read `current()` each time; the accent is pushed.
+- `accent.rs`: the accent color (`docs/accent.md`), applied at install and on every change.
 - `session.rs`: one menu interaction from open to close. `present()` handles popped-up menus,
   `track_menu_bar()` the menu bar. Both run the same modal loop (`Session::track`), with a stack
   of `Level`s (the menu and its open submenus) and, for the menu bar, a `MenuBar` of titles (the
@@ -110,6 +115,13 @@ processes, helpers nested in a `Frameworks` folder (browser and Electron rendere
 window, `SecurityAgent`, and the Dock (yabai's). An app that exits within 10 s of a load, twice,
 is left alone until the daemon restarts.
 
+Settings: `erismenus set`/`reload` and the settings window (any user, no root) write
+`~/.config/erismenus/config.toml` and publish it packed as the notification's state. A
+notification's state only lasts while something is registered for it, so the daemon holds a
+registration for good and publishes the console user's file whenever someone logs in.
+
 Installed files: `/Library/Application Support/ErisMenus/{erismenus,eris-inject-thread,liberismenus.dylib}`,
+`/Applications/ErisMenus.app` (the same `erismenus` binary; opened from the bundle it shows the
+settings window),
 `/Library/LaunchDaemons/io.github.eriskii.erismenus.plist`, `/usr/local/bin/erismenus`, log
 `/Library/Logs/erismenus.log`.

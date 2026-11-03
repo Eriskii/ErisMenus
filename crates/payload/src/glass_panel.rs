@@ -26,7 +26,7 @@ use eris_inject_payload::sys::SpinLock;
 use menus_core::Rect;
 use menus_core::layout::Metrics;
 use menus_core::shape;
-use menus_core::spring::{Spring, Style};
+use menus_core::spring::Spring;
 
 use crate::glass::{Kit, is_kind, kit};
 use crate::objc::{self, Id, NIL, Original, Sel, class, nsstring, release};
@@ -362,7 +362,7 @@ fn dress(sdf: Id) {
 
 /// The springs of our menus' opening, sampled: (width, height, reveal) at each frame.
 fn samples(size: CGSize) -> Vec<(f64, f64, f32)> {
-    let a = Style::default().animation();
+    let a = crate::settings::current().style.animation();
     let mut width = Spring::new(size.width * a.collapsed_width, a.widen).with_epsilon(0.05);
     let mut height = Spring::new(size.height * a.collapsed_height, a.unroll).with_epsilon(0.05);
     let mut reveal = Spring::new(0.0, a.reveal);
@@ -476,7 +476,7 @@ pub extern "C" fn do_order_window(this: Id, cmd: Sel, options: Id) {
     let was_visible = msg!(bool; this, c"isVisible");
     let original: extern "C" fn(Id, Sel, Id) = unsafe { core::mem::transmute(ORDER.get()) };
     original(this, cmd, options);
-    if !was_visible && msg!(bool; this, c"isVisible") && on_main() {
+    if !was_visible && msg!(bool; this, c"isVisible") && on_main() && crate::settings::current().glass {
         objc::autoreleasing(|| shown(this));
     }
 }

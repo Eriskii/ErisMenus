@@ -4,45 +4,36 @@ Working notes for whoever continues ErisMenus, an agent after a context compacti
 this, then `architecture.md`, `appkit-internals.md` and `testing.md`. Keep it current: rewrite the
 "State" and "Next" sections rather than appending history.
 
-## State (2026-11-03)
+## State (2026-11-03, evening)
 
-- **Works, confirmed by the user after a reboot**: context menus, pop-up and pull-down buttons,
-  menu bar menus, in every app with a UI: Obsidian, kitty, Finder (including its tag row), Helium,
-  ErisDock, and system UI.
-- **New since, devhost-verified only (not installed yet; the user runs `sudo target/dist/erismenus
-  install`)**:
-  - the Apple menu is ours (click, ← →, Control-F2);
-  - menu bar extras' menus hang from the item flush with the bar; the item highlights (AppKit's
-    `popUpStatusBarMenu:` does that around `presentPopup:`);
-  - `sys::Tracking`: menus take the keyboard and background mouse events like AppKit's
-    `_setupMenuTracking`. Before, a menu bar extra's menu in an agent app (or a context menu in a
-    window behind) couldn't be used from the keyboard and didn't close on a click elsewhere
-    (checked: the old build in the `inactive` scenario never got the keyboard);
-  - after Control-F2, AppKit's begun session is ended (it used to stay current, holding the
-    background event mask);
-  - the menu bar title highlight works: the window server is told the title's rect
-    (`menuBarMenuTitlesArray`) while open, and nothing after. Not seen on screen.
-  - search field, segmented control, path control, token field, toolbar item, right click and
-    Services menus were all already ours (now scenarios).
-- **Installed** build: `ErisMenusBuild1793682636` (matches commit `1feffa2`). The daemon is a
-  system LaunchDaemon (`io.github.eriskii.erismenus`) and survives reboots.
+- **Installed and confirmed by the user**: menus everywhere (context, pop-up/pull-down, menu bar,
+  Apple menu, menu bar extras), glass painted over including Control Center's modules, which look
+  and open like our menus. Installed build: lib 0.1.2 (`d9f00c5` era).
+- **Built, tested, not installed yet: settings and a custom accent.**
+  - `~/.config/erismenus/config.toml` (accent hex or "system", menus on/off, glass on/off,
+    animation), set with `erismenus set` or the settings window (`/Applications/ErisMenus.app`,
+    same binary). Published as the state of the `io.github.eriskii.erismenus.settings` Darwin
+    notification; the daemon holds a registration (state dies with the last one) and publishes the
+    user's file at login.
+  - Accent: `accent.rs`, recipe in `docs/accent.md` (Multicolor in the argument domain,
+    `_controlTintChanged:` before `_setAccentColor:`, swizzles on `+[NSColor controlAccentColor]`
+    and the folder tint). Live changes verified with `tools/accenthost.m` (system → color → color
+    → system), our menus highlight in it. Not covered: WebKit form controls (WebContent process),
+    the Dock, out-of-process UI.
+  - Regression: 26 devhost scenarios and 40 glasshost checks pass; `menus off` / `glass off`
+    verified with a held registration (see `testing.md`).
 - **Repos**, all public GPL-3.0-or-later, pushed, under `Eris <13102203+Eriskii@users.noreply.github.com>`:
   - `Eriskii/ErisMenus`, the monorepo's `apps/ErisMenus` submodule;
-  - `Eriskii/ErisMacInjectLib`, the monorepo's `libs/ErisMacInjectLib` submodule;
-  - `Eriskii/apple-sharpenerer` (outside the monorepo, at `../apple-sharpenerer`), which also loads
-    through the lib;
-  - both depend on the lib by git tag (`v0.1.0`), as every Eris Rust project does; inside the
-    monorepo `.cargo/config.toml` patches it to `libs/ErisMacInjectLib`. A lib change both need is a
-    new tag;
-  - `Eriskii/ErisMonorepo` records both submodules.
-- 26 devhost scenarios pass (the default set); `menus-core` has 27 unit tests; the lib has 5.
-- **Glass**: `glass.rs` paints all Liquid Glass black (Control Center's modules, popovers,
-  alerts, Notification Center, Spotlight, glass buttons) and restyles tooltips. Installed
-  (`bfa3261`); the user confirmed Control Center's modules render black, but said they didn't look
-  or open like our menus. → `glass_panel.rs`: glass panels hanging from the menu bar get our body
-  (corners, shadow) and our opening (unroll from under the status item, springs sampled into
-  keyframes). 13 `glasshost` scenarios pass dlopened, `open` captures the opening frame by frame;
-  not yet installed or seen in the real Control Center. Its closing is still the app's own.
+  - `Eriskii/ErisMacInjectLib` (`libs/ErisMacInjectLib`), tags v0.1.0–v0.1.2: v0.1.1 rechecks
+    processes caught mid-launch (xpcproxy) and only counts crashes with a crash report; v0.1.2
+    waits on suspended processes (extensions) instead of stalling the daemon;
+  - `Eriskii/apple-sharpenerer` (`../apple-sharpenerer`), loads into regular and agent apps;
+  - both depend on the lib by git tag, patched to `libs/` inside the monorepo (`.cargo/config.toml`);
+  - ErisDock got one fix from us (`dd5501d`, rejoin every space when pinned to one); the rest of
+    its working tree is the other agent's, uncommitted.
+- Lessons from today: installs can leave two builds in running apps until they relaunch (the
+  user saw "random" breakage after installs; a reboot after installing gives a clean state).
+  Don't drive the user's pointer or spaces (see memory).
 
 ## Working with this user
 

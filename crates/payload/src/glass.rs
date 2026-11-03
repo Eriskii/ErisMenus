@@ -328,7 +328,15 @@ extern "C" fn sdf_luma(this: Id, cmd: Sel, backdrop: Id, luma: f64) {
     original(this, cmd, backdrop, if glass { 0.0 } else { luma })
 }
 
+/// Glass turned off in the settings is left as SwiftUI lays it out from then on.
+fn painting() -> bool {
+    crate::settings::current().glass
+}
+
 fn restyle(kit: &Kit, sdf: Id) {
+    if !painting() {
+        return;
+    }
     let key = (&raw const GLASS_KEY).cast::<c_void>();
     let mut glass = !unsafe { objc_getAssociatedObject(sdf, key) }.is_null();
     let backdrop = strip_filters(kit, sdf, 0);
@@ -519,7 +527,9 @@ fn paint(kit: &Kit, layer: Id, body: Id, depth: usize) {
 extern "C" fn install_tooltip(this: Id, cmd: Sel, view: Id, tooltip: Id, window: Id, new: bool) {
     let original: extern "C" fn(Id, Sel, Id, Id, Id, bool) = unsafe { transmute(TOOLTIP.get()) };
     original(this, cmd, view, tooltip, window, new);
-    objc::autoreleasing(|| restyle_tooltip(window));
+    if painting() {
+        objc::autoreleasing(|| restyle_tooltip(window));
+    }
 }
 
 fn restyle_tooltip(window: Id) {

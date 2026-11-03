@@ -16,12 +16,14 @@ extern crate alloc;
 
 pub(crate) use eris_inject_payload::{log, msg, objc, rt};
 
+mod accent;
 mod glass;
 mod glass_panel;
 mod hooks;
 mod model;
 mod panel;
 mod session;
+mod settings;
 mod style;
 mod sys;
 
@@ -67,6 +69,7 @@ fn has_app() -> bool {
 }
 
 extern "C" fn install(_: *mut core::ffi::c_void) {
+    objc::autoreleasing(settings::listen);
     if hooks::install() {
         log!("drawing menus in pid {}", unsafe { rt::getpid() });
         eris_inject_payload::sys::on_main_after(5.0, verify);
