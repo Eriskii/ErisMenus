@@ -63,6 +63,45 @@ devhost) making another app frontmost mid-run ends menu bar menus with "the app 
 value; `make devhost` sometimes leaves a stale binary, so after editing `devhost.m` build it with
 `clang -fobjc-arc -framework AppKit -framework QuartzCore tools/devhost.m -o target/dist/devhost`.
 
+## Liquid Glass
+
+```sh
+make glasshost      # builds target/dist/{liberismenus.dylib,glasshost}
+target/dist/glasshost target/dist/liberismenus.dylib /tmp/glass [scenario ...]
+target/dist/glasshost - /tmp/glass-before          # the glass as it is, for comparison
+tools/glass-e2e.sh /tmp/glass-e2e                  # through the installed daemon
+```
+
+Glass is composited by the window server, so `renderInContext:` doesn't see it. `glasshost` puts
+each kind up over saturated stripes, captures the window with `CGWindowListCreateImage` (a process
+may capture its own windows without Screen Recording access; the function is gone from the SDK
+headers but still exported, so it's looked up with `dlsym`), writes `<scenario>.png` and checks
+pixels: glass opaque black where the stripes would show through, glass on glass dark gray, text
+light, outside the shape untouched. Each check prints PASS or FAIL (SKIP with `-`, with what it
+measured); it exits 1 if any failed. A capture only composites that one window, so the stripes have
+to be in the same window as the glass (the separate popover, alert and tooltip windows show
+dark glass over nothing without the payload). Windows flash on screen while it runs.
+
+| Scenario | Checks |
+|---|---|
+| `glass` | `NSGlassEffectView` regular, radius 48, clear, tinted (in an inactive window) |
+| `control-center` | A status-level non-activating panel like a Control Center module: a glass panel holding a `NSGlassEffectContainerView` of glass circles and two tiles merged into one shape, an accent "on" toggle, labels |
+| `popover`, `sheet`, `alert` | `NSPopover`, an `NSAlert` sheet, a modal `NSAlert` (`runModal`) |
+| `tooltip` | A real `NSToolTipPanel` (`_displayTemporaryToolTipForView:withString:`): black, rounded, light text |
+| `button` | `NSBezelStyleGlass`, and no blurred capture around it |
+| `tint` | Tinted glass in a key window keeps its tint, solid |
+| `light`, `light-popover`, `light-sheet` | The same in light mode: the text has to turn light |
+| `dynamic` | Corner radius, tint, style, hidden, appearance and an animated resize, then 40 glass views made and dropped |
+
+SwiftUI's own glass (`glassEffect`, `GlassEffectContainer`, `.buttonStyle(.glass)`) and the glass
+materials Control Center and Notification Center use (`Material._glass(.controlCenter)`, reached
+from Swift with `@_silgen_name`) were checked once with throwaway Swift hosts; they're the same
+`SDFLayer` as `NSGlassEffectView` inside, which `glasshost` covers.
+
+To leave an app's glass alone: `defaults write <bundle id> ErisMenusGlassDisabled -bool YES` and
+relaunch it (checked at install, unlike `ErisMenusDisabled`, which menus check every time; it
+turns glass off too). The log says `glass is left alone in this app`.
+
 ## End to end, through the installed daemon
 
 ```sh
@@ -88,7 +127,8 @@ tail /Library/Logs/erismenus.log                                          # the 
 ```
 
 In zsh, `log` is a builtin; use `/usr/bin/log` in scripts. The payload logs when it's hooked into
-an app (`drawing menus in pid …`, `6 of 6 menu hooks in place`), every menu it draws, every menu
+an app (`drawing menus in pid …`, `6 of 6 menu hooks in place`, `painting over glass in pid … (3
+of 3 hooks)`), every menu it draws, every menu
 bar click it takes (`opening title N`) or can't place, and why each menu closed. Crash reports are
 in `~/Library/Logs/DiagnosticReports`; frames inside the payload show up unsymbolicated.
 

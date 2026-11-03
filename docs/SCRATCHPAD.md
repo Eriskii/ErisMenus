@@ -30,18 +30,23 @@ this, then `architecture.md`, `appkit-internals.md` and `testing.md`. Keep it cu
   - `Eriskii/ErisMenus`, the monorepo's `apps/ErisMenus` submodule;
   - `Eriskii/ErisMacInjectLib`, the monorepo's `libs/ErisMacInjectLib` submodule;
   - `Eriskii/apple-sharpenerer` (outside the monorepo, at `../apple-sharpenerer`), which also loads
-    through the lib, by a local path dependency (`../ErisMonorepo/libs/ErisMacInjectLib`);
+    through the lib;
+  - both depend on the lib by git tag (`v0.1.0`), as every Eris Rust project does; inside the
+    monorepo `.cargo/config.toml` patches it to `libs/ErisMacInjectLib`. A lib change both need is a
+    new tag;
   - `Eriskii/ErisMonorepo` records both submodules.
 - 26 devhost scenarios pass (the default set); `menus-core` has 27 unit tests; the lib has 5.
-- Another agent works on removing Liquid Glass elsewhere (Control Center's modules, which aren't
-  NSMenus) on branch `glass`, worktree `apps/ErisMenus-glass`; its devhost runs show up in the log
-  ("painting over glass") and can steal focus from ours mid-run.
+- **Glass** (merged from the `glass` branch, not installed yet): `glass.rs` paints all Liquid
+  Glass black (Control Center's modules, popovers, alerts, Notification Center, Spotlight, glass
+  buttons) and restyles tooltips; 12 `glasshost` scenarios pass dlopened. Unverified until
+  installed: inside the real Control Center and the other system UI (`tools/glass-e2e.sh` checks
+  the daemon path with a test app).
 
 ## Working with this user
 
 - Wants **every** menu on the system replaced, with no app lists or special cases; says
-  "tooltips" for menus. Real hover tooltips (the yellow-ish help tags) haven't been asked for
-  clearly. I offered; there was no answer yet.
+  "tooltips" for menus. Real hover tooltips are restyled by `glass.rs` (asked for with the rest of
+  the glass: "anywhere where we still got liquid ASS").
 - Impatient with process talk: fix it, verify it, report briefly. Doesn't want to be sent through
   test steps that could have been automated (use `tools/e2e.sh`).
 - Rust only (objc2 in std apps, the raw `msg!` runtime in payloads). No `Co-Authored-By` or
@@ -82,22 +87,23 @@ this, then `architecture.md`, `appkit-internals.md` and `testing.md`. Keep it cu
 
 ## Next (none started)
 
+- **Glass the payload can't reach**: the Dock (Dock background, folders, Launchpad, Mission
+  Control) builds its own glass from Core Animation and is skipped for yabai; the menu bar itself is
+  drawn out of process; login window and SecurityAgent are skipped. Glass in light mode: SwiftUI
+  glass that's only part of a window keeps dark text on the black body (AppKit glass and windows
+  made of glass are fixed); the user is in dark mode.
 - **Help menu search**: AppKit's Help menu has a search field row (not an item; see
   `appkit-internals.md`); ours has none. Would need a field in our panel that gets the keys, and
   results from the main menu's items (and help books).
 - **Palette submenus** (`NSMenuPresentationStylePalette`) open as ordinary submenus; AppKit draws
   them inline as a row of images. An inline row with ← → between its cells would match.
 - **Not menus, still AppKit's look**: NSComboBox's list (`NSComboBoxWindow`, a visual effect
-  view), the share picker (a popover), Control Center's modules (the other agent).
+  view), the share picker (a popover; its glass is painted over by `glass.rs`).
 - Status item keyboard navigation between menu bar extras (`+[NSStatusBarButtonCell
   _trackNavigationLoopOnMenu:view:]`) isn't replicated.
-- **Hover tooltips**, if the user wants them: AppKit's tooltip window (`NSToolTipManager`,
-  `_NSToolTipWindow`/panel) would need the same treatment.
 - Long menus scroll with the wheel and keyboard, but there are no scroll arrows and no hover
   auto-scroll.
 - Accessibility (VoiceOver) for our panels: none.
 - Settings: animation style and colors are compiled in (`Style::default()`, `style.rs`); a config
   like ErisDock's (`~/.config/…`, Darwin-notify hot reload as sharpenerer does) would fit.
-- apple-sharpenerer's path dependency on the lib: switch to a git dependency so its repo builds
-  on its own.
 - Possibly someday: the out-of-process route (TrustedUIService), see `appkit-internals.md`.

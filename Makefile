@@ -6,7 +6,7 @@ INJECT   = $(shell $(CARGO) metadata --format-version 1 | perl -ne 'print $$1 an
 
 export MACOSX_DEPLOYMENT_TARGET := 26.0
 
-.PHONY: all payload thread cli test devhost self-test clean
+.PHONY: all payload thread cli test devhost glasshost self-test clean
 
 all: payload thread cli
 
@@ -34,6 +34,10 @@ test:
 # A test app that loads the payload, opens menus, drives them and draws them to PNGs.
 devhost: payload
 	clang -fobjc-arc -framework AppKit -framework QuartzCore tools/devhost.m -o $(OUT)/devhost
+
+# A test app that puts up every kind of Liquid Glass, captures it as composited and checks it's gone.
+glasshost: payload
+	clang -fobjc-arc -framework AppKit -framework QuartzCore tools/glasshost.m -o $(OUT)/glasshost
 
 # Maps the payload into the CLI itself and starts it, the way the daemon does (no root needed),
 # and checks the thread helper can start a signed thread.

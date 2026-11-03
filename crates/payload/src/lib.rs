@@ -16,6 +16,7 @@ extern crate alloc;
 
 pub(crate) use eris_inject_payload::{log, msg, objc, rt};
 
+mod glass;
 mod hooks;
 mod model;
 mod panel;
@@ -69,6 +70,7 @@ extern "C" fn install(_: *mut core::ffi::c_void) {
         log!("drawing menus in pid {}", unsafe { rt::getpid() });
         eris_inject_payload::sys::on_main_after(5.0, verify);
     }
+    glass::install();
 }
 
 extern "C" fn verify(_: *mut core::ffi::c_void) {

@@ -144,6 +144,78 @@ Codable `TrustedUITransaction`s (`ShowMenuAction`, `IncrementalUpdateAction`,
 `AppKit.MenuItem`. Off by default on 26.4; probably how menus will work once Apple ships paste
 verification.
 
+## Liquid Glass
+
+Everything glass in an app on 26.4 is one layer class, `SwiftUI.SDFLayer` (SwiftUICore, which AppKit
+links). SwiftUI's `glassEffect` / `_glassEffect`, glass materials (`Material._glass(.controlCenter)`,
+`.notificationCenter`, …), `GlassEffectContainer`, `.buttonStyle(.glass)`; AppKit's `NSGlassEffectView`
+(and `NSGlassView`, `NSContainerConcentricGlassEffectView`), which hosts SwiftUI
+(`_NSCoreHostingView<NSGlassEffectView.RootView>`) beside a `ContentHolderView`; `NSPopover`
+(`_NSPopoverWindow` → `NSPopoverFrame` → `NSGlassView`); `NSAlert` (sheet and modal); glass-bezel
+`NSButton`s. Control Center's binary imports `_glassEffect`, `GlassEffectContainer`,
+`_Glass.explicit/tintColor` and `Material._glass(.controlCenter)` from SwiftUI, and nothing glass
+from QuartzCore directly. Only QuartzCore, SwiftUICore, DesignLibrary and the Dock reference the
+glass filter or the SDF classes (the Dock builds its glass from Core Animation itself).
+
+An `SDFLayer`, built and updated in its `layoutSublayers`:
+
+```
+SwiftUI.SDFLayer
+  CALayer (0×0)                       the content, hidden at its source and…
+  CALayer
+    CABackdropLayer  filters=[glassBackground]  delegate=the SDFLayer (luma tracking)
+      CASDFLayer  effect=CASDFOutputEffect      the shape as a distance field, for the filter
+        CALayer > CASDFElementLayer             one per shape (corner radius, merged shapes)
+    [CALayer > CALayer > CASDFLayer CASDFGradientEffect + vibrantColorMatrix(backdrop-aware)
+                         CASDFLayer CASDFFillEffect, compositingFilter destIn]   tint only
+    SDFPortalLayer                             …shown here, above the glass
+    CASDFLayer  effect=CASDFKeyFillHighlightEffect, vibrantColorMatrix   the rim
+```
+
+(`NSPopover`, alerts and buttons skip the outer `CALayer`.) The refraction is the
+`glassBackground` `CAFilter` (`kCAFilterGlassBackground`) reading the `CASDFOutputEffect` layer under
+it; without the filter that layer draws its distance field as a rainbow normal map. A
+`CASDFLayer` whose effect is a `CASDFFillEffect` (`color`, a `CGColor`) draws its shape solid. The
+tint's color matrix maps what's behind it (`inputBackdropAware`) and carries the tint in its
+offsets, so over black it comes out as the tint itself (in an active window; inactive windows
+show tints gray, glass or not). `-[CABackdropLayer setEnabled:NO]` stops the capture; with the
+filter still on, a disabled backdrop draws nothing at all, sublayers included. The capture is
+taken at a fraction of the resolution, so a backdrop without its filter shows a blurry copy of
+what's behind in the corners of its rect. SwiftUI reads `effect` back on later layouts, so an
+effect has to keep its class (an `as!` would trap): ErisMenus changes it to a subclass of
+`CASDFOutputEffect` whose `configureLayer:transaction:` (what puts an effect into the render
+tree) is a `CASDFFillEffect`'s. Copies (`copyWithZone:`, `initWithLayer:`) keep the subclass.
+KVC on a filter key path that's gone (`filters.glassBackground.inputAmount`) is ignored.
+
+What `glass.rs` does after each `layoutSublayers`: takes the glass filter off and disables the
+backdrop, reclasses the output effect (black, or 0.11 gray for glass inside glass), hides the
+highlight layers (`CASDFKeyFillHighlightEffect`, `CASDFGlassHighlightEffect`,
+`CASDFGlassDisplacementEffect`), marks the `SDFLayer` (an associated object, since its filter is
+gone after the first pass) so `backdropLayer:didChangeLuma:` reports 0 (and calls it once with 0
+then, since the disabled backdrop won't report again), and on the main thread
+gives the glass's `NSGlassEffectView`, and the content view of a window the glass fills (90% of
+it), the dark appearance. At install it does the same to the `SDFLayer`s already in
+`NSApp.windows`, which may not be laid out again for a while.
+
+Glass inside glass: SwiftUI's has the outer `SDFLayer` among its ancestors; AppKit's has another
+`NSGlassEffectView` above the one it belongs to (whose layer is two up from its `SDFLayer`).
+
+Content colors come from the glass's appearance: an `NSGlassEffectView` in light mode gets dark
+text, and adaptive glass (`backdropLayer:didChangeLuma:`, luma 0–1) flips its content dark over
+bright backgrounds. A popover's content isn't in its glass view but beside it, under an
+`NSPopoverFrame` with a `VibrantLight`/`VibrantDark` appearance AppKit sets after showing.
+
+Tooltips aren't glass: `NSToolTipPanel` → `NSVisualEffectView` (blur `CABackdropLayer`, tint
+layers) → `NSCustomToolTipDrawView`. `-[NSToolTipManager installContentView:forToolTip:toolTipWindow:isNew:]`
+runs for every tooltip shown (`view` is nil for plain ones); the effect view's own layer and
+sublayers are reset by AppKit after it, but `-[NSVisualEffectView _setClear:YES]` removes the
+material for good. `_displayTemporaryToolTipForView:withString:` shows one without hovering.
+
+Not glass, left alone: `NSVisualEffectView` materials (sidebars, HUDs), the titlebar's scroll
+pocket blur (`NSScrollPocket`, `variableBlur`), `NSLessExpensiveSubduedGlassEffectView` (a
+vibrancy view, no backdrop), Control Center's `BentoBackdrop` (a `CABackdropLayer` subclass with a
+Gaussian blur).
+
 ## Other gotchas
 
 - The main dispatch queue isn't serviced in `NSEventTrackingRunLoopMode`; timers in common modes

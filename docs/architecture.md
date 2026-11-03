@@ -1,6 +1,8 @@
 # Architecture
 
-ErisMenus replaces how macOS 26 shows menus, not what's in them. AppKit still builds every menu,
+ErisMenus replaces how macOS 26 shows menus, not what's in them, and paints over the rest of
+Liquid Glass (Control Center, popovers, alerts, Notification Center, tooltips, …) with the same
+black body. AppKit still builds every menu,
 validates its items and performs the chosen one; ErisMenus draws the menu and tracks the pointer and
 keyboard while it's open. It runs inside every app, loaded by a root daemon.
 
@@ -13,6 +15,7 @@ keyboard while it's open. It runs inside every app, loaded by a root daemon.
 | `crates/erismenus` | The command and the root daemon. |
 | `tools/devhost.m` | A test app that loads the dylib and drives every kind of menu. |
 | `tools/e2e.sh` | The same test app, loaded by the installed daemon instead. |
+| `tools/glasshost.m`, `tools/glass-e2e.sh` | A test app that puts up every kind of glass, captures it as the window server composites it and checks it's gone; dlopened or through the daemon. |
 | `../../libs/ErisMacInjectLib` | Loading into apps: the injector, the daemon loop, launchd, the payload runtime (PAC, objc, logging). Shared with apple-sharpenerer. |
 
 ## The payload
@@ -37,6 +40,11 @@ keyboard while it's open. It runs inside every app, loaded by a root daemon.
 - `model.rs`: a menu's items as rows: hidden items out, separators tidied, alternates folded into
   the row they replace, each retained.
 - `style.rs`: colors, fonts, attributed strings, SF Symbols.
+- `glass.rs`: Liquid Glass painted over, installed from `lib.rs` after the menu hooks, with its own
+  build marker (`ErisMenusGlassBuild<time>`) and opt-out (`ErisMenusGlassDisabled`). Three hooks:
+  `-[SwiftUI.SDFLayer layoutSublayers]` (all glass), `-[SwiftUI.SDFLayer backdropLayer:didChangeLuma:]`
+  (adaptive glass), `-[NSToolTipManager installContentView:forToolTip:toolTipWindow:isNew:]`
+  (tooltips). How glass is drawn and what the hooks change: `appkit-internals.md`.
 - `sys.rs`: CoreGraphics geometry, paths, colors, the clock, and `Tracking`: what AppKit's
   `_setupMenuTracking` does with the window server while a menu is open (background mouse events,
   the keyboard, HIToolbox's menu tracking notifications), undone when dropped.

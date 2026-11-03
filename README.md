@@ -26,8 +26,14 @@ AppKit's menus. Rust, `no_std`, loaded into every app by a root daemon.
 - **Keyboard**: ↑ ↓, Home and End move. → opens a submenu and ← closes it. Return, Enter and
   Space choose, and Escape dismisses. Typing jumps to a matching title.
 - **Long menus** scroll with the wheel and follow the keyboard.
+- **All other Liquid Glass** in an app is painted over with the same black body, in the glass's
+  own shape and without refraction, rims or sheen: Control Center's modules (Wi-Fi, Battery,
+  Sound, …), Notification Center, Spotlight, popovers, alerts, glass buttons, SwiftUI's
+  `glassEffect`. Hover tooltips get the black body too. Out of reach: the Dock's own glass and the
+  menu bar itself (drawn outside apps).
 
 Every menu in an app is left to AppKit with `defaults write <bundle id> ErisMenusDisabled -bool YES`.
+`ErisMenusGlassDisabled` leaves just the glass alone.
 
 ## How it works
 
