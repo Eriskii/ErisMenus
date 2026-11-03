@@ -64,7 +64,12 @@ pub fn highlighted(impl_: Id) -> Option<Id> {
 
 /// Shows and tracks the menu `context` describes; false to leave it to AppKit.
 pub fn present(impl_: Id, _view: Id, context: Id) -> bool {
-    if !ACTIVE.load(Ordering::Acquire).is_null() || disabled() {
+    if !ACTIVE.load(Ordering::Acquire).is_null() {
+        log!("leaving a menu opened from inside another to AppKit");
+        return false;
+    }
+    if disabled() {
+        log!("menus are off in this app (ErisMenusDisabled)");
         return false;
     }
     let menu = msg!(Id; context, c"menu");
@@ -75,6 +80,7 @@ pub fn present(impl_: Id, _view: Id, context: Id) -> bool {
         log!("leaving a menu with custom item views to AppKit");
         return false;
     }
+    log!("drawing a menu of {} items", msg!(isize; menu, c"numberOfItems"));
     ACTIVE.store(impl_, Ordering::Release);
     CANCELLED.store(false, Ordering::Release);
     let menu = retain(menu);
@@ -132,6 +138,9 @@ fn track_menu_bar_now(event: Id) -> bool {
         [clicked, Some(mouse)].into_iter().flatten().find_map(|p| titles.iter().position(|t| t.rect.contains(p)))
     };
     let Some(start) = start.filter(|_| !titles.is_empty()) else {
+        if keyboard || titles.iter().any(|t| t.rect.x <= mouse.x && mouse.x < t.rect.max_x()) {
+            log!("menu bar event at {:.0},{:.0} isn't on any of {} titles; leaving it to AppKit", mouse.x, mouse.y, titles.len());
+        }
         return false;
     };
     log!(

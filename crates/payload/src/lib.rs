@@ -38,7 +38,18 @@ fn start(injected: bool) {
         unsafe { rt::usleep(50_000) };
         waited += 50;
     }
+    // Hooks go in on the main thread, once the app is running: the daemon starts us while the
+    // app is still starting up.
+    eris_inject_payload::sys::on_main(install);
+}
+
+extern "C" fn install(_: *mut core::ffi::c_void) {
     if hooks::install() {
-        log!("drawing menus in pid {pid}");
+        log!("drawing menus in pid {}", unsafe { rt::getpid() });
+        eris_inject_payload::sys::on_main_after(5.0, verify);
     }
+}
+
+extern "C" fn verify(_: *mut core::ffi::c_void) {
+    hooks::verify();
 }

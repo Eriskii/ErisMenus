@@ -3,7 +3,9 @@
 use core::mem::transmute;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::objc::{Id, Imp, Original, Sel, class, define_class, swizzle, swizzle_class};
+use core::ffi::CStr;
+
+use crate::objc::{self, Id, Imp, Original, Sel, class, define_class, swizzle, swizzle_class};
 
 /// A class only we define, so a second copy of the payload can tell it's not the first.
 const LOADED_MARKER: &core::ffi::CStr = c"ErisMenusLoaded";
@@ -90,32 +92,76 @@ extern "C" fn menu_bar_monitor_event(this: Id, cmd: Sel, event: Id) -> bool {
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
-/// False if we were already installed, or AppKit lacks the menu presentation we replace.
+struct Hook {
+    class: &'static CStr,
+    method: &'static CStr,
+    class_method: bool,
+    imp: Imp,
+    original: &'static Original,
+}
+
+fn hooks() -> [Hook; 6] {
+    let hook = |class, method, class_method, imp, original| Hook { class, method, class_method, imp, original };
+    [
+        hook(c"NSContextMenuImpl", c"presentPopup:fromView:withContext:animated:", true, present_popup as Imp, &PRESENT),
+        hook(c"NSCocoaMenuImpl", c"_cancelTrackingWithAnimation:", false, cancel_tracking as Imp, &CANCEL),
+        hook(c"NSCocoaMenuImpl", c"highlightedItem", false, highlighted_item as Imp, &HIGHLIGHTED),
+        hook(c"NSMenuTrackingSession", c"startMonitoringEvents:", false, start_monitoring_events as Imp, &MONITOR),
+        hook(c"NSMenuBarTrackingSession", c"_mouseDownEventHandler:", false, menu_bar_mouse_down as Imp, &MOUSE_DOWN),
+        hook(c"NSMenuBarTrackingSession", c"_handleMonitorEvent:", false, menu_bar_monitor_event as Imp, &MONITOR_EVENT),
+    ]
+}
+
+impl Hook {
+    fn name(&self) -> alloc::string::String {
+        let kind = if self.class_method { '+' } else { '-' };
+        alloc::format!("{kind}[{} {}]", self.class.to_str().unwrap_or("?"), self.method.to_str().unwrap_or("?"))
+    }
+
+    fn apply(&self) -> bool {
+        if self.class_method {
+            swizzle_class(self.class, self.method, self.imp, self.original)
+        } else {
+            swizzle(self.class, self.method, self.imp, self.original)
+        }
+    }
+
+    fn in_place(&self) -> bool {
+        objc::implementation(self.class, self.method, self.class_method) == Some(self.imp)
+    }
+}
+
+/// Replaces AppKit's menu methods with ours. Run on the main thread once the app is up. False if
+/// we were already installed, or AppKit lacks the menu presentation we replace.
 pub fn install() -> bool {
     // Another copy of us may already be in this app (the daemon restarted, say): it has the menus.
     if INSTALLED.swap(true, Ordering::AcqRel) || define_class(LOADED_MARKER, c"NSObject", &[]).is_null() {
         log!("already running");
         return false;
     }
-    if !swizzle_class(
-        c"NSContextMenuImpl",
-        c"presentPopup:fromView:withContext:animated:",
-        present_popup as Imp,
-        &PRESENT,
-    ) {
-        log!("no +[NSContextMenuImpl presentPopup:fromView:withContext:animated:]; leaving menus alone");
+    let hooks = hooks();
+    if !hooks[0].apply() {
+        log!("no {}; leaving menus alone", hooks[0].name());
         return false;
     }
-    for (class, method, imp, original) in [
-        (c"NSCocoaMenuImpl", c"_cancelTrackingWithAnimation:", cancel_tracking as Imp, &CANCEL),
-        (c"NSCocoaMenuImpl", c"highlightedItem", highlighted_item as Imp, &HIGHLIGHTED),
-        (c"NSMenuTrackingSession", c"startMonitoringEvents:", start_monitoring_events as Imp, &MONITOR),
-        (c"NSMenuBarTrackingSession", c"_mouseDownEventHandler:", menu_bar_mouse_down as Imp, &MOUSE_DOWN),
-        (c"NSMenuBarTrackingSession", c"_handleMonitorEvent:", menu_bar_monitor_event as Imp, &MONITOR_EVENT),
-    ] {
-        if !swizzle(class, method, imp, original) {
-            log!("missing -[{} {}]; that part is skipped", class.to_str().unwrap_or("?"), method.to_str().unwrap_or("?"));
+    for hook in &hooks[1..] {
+        if !hook.apply() {
+            log!("missing {}; that part is skipped", hook.name());
         }
     }
     true
+}
+
+/// Checks every hook is still ours, puts back any that something replaced, and says so.
+pub fn verify() {
+    let mut fine = 0;
+    for hook in hooks() {
+        if hook.in_place() {
+            fine += 1;
+        } else if objc::implementation(hook.class, hook.method, hook.class_method).is_some() {
+            log!("{} was replaced after we hooked it; hooking it again", hook.name());
+            hook.apply();
+        }
+    }
+    log!("{fine} of 6 menu hooks in place");
 }
