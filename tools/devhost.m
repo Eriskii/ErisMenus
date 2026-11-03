@@ -13,15 +13,127 @@
 
 static NSString *out;
 
-@interface Host : NSObject <NSMenuDelegate>
-@property NSWindow *window;
+@interface Host : NSObject <NSMenuDelegate, NSToolbarDelegate, NSTokenFieldDelegate>
+@property NSWindow *window, *controls;
 @property NSPopUpButton *popup, *pulldown;
 @property NSTextView *text;
+@property NSSearchField *search;
+@property NSSegmentedControl *segmented;
+@property NSPathControl *path;
+@property NSComboBox *combo;
+@property NSTokenField *tokens;
+@property NSStatusItem *status;
 @end
+
+// What the menu bar last told the window server to draw highlighted (the title under the selection
+// capsule), from the settings AppKit hands +[NSCGSSpace setMenuBarSettings:globalSettings:].
+static NSString *barHighlight = @"(nothing sent)";
+static IMP originalSetMenuBarSettings;
+
+static void recordMenuBarSettings(id self, SEL _cmd, NSArray *settings, id global) {
+    NSMutableArray *rects = [NSMutableArray array];
+    for (NSDictionary *display in settings)
+        for (NSData *data in display[@"menuBarMenuTitlesArray"])
+            if (data.length == sizeof(CGRect)) [rects addObject:NSStringFromRect(*(const CGRect *)data.bytes)];
+    barHighlight = rects.count ? [rects componentsJoinedByString:@" "] : @"none";
+    ((void (*)(id, SEL, id, id))originalSetMenuBarSettings)(self, _cmd, settings, global);
+}
+
+// Which menus are up: ours (borderless panels at the menu level) or AppKit's (NSPopupMenuWindow,
+// Liquid Glass).
+static void which(NSString *what) {
+    int ours = 0, appkits = 0;
+    Class glass = NSClassFromString(@"NSPopupMenuWindow");
+    for (NSWindow *w in NSApp.windows) {
+        if (!w.isVisible) continue;
+        if (glass && [w isKindOfClass:glass]) appkits++;
+        else if (w.level == 101 && [w isMemberOfClass:NSPanel.class]) ours++;
+        else {
+            if (w.level >= 101) printf("  other window up: %s at level %ld\n", class_getName(w.class), w.level);
+            continue;
+        }
+        printf("  menu window at %s\n", NSStringFromRect(w.frame).UTF8String);
+    }
+    printf("  %s: %d of our menus, %d of AppKit's\n", what.UTF8String, ours, appkits);
+}
+
+// A click on a view, as the window server would deliver it; or only its press or its release.
+static void mouse(NSView *view, NSPoint at, NSArray<NSNumber *> *types) {
+    NSPoint p = [view convertPoint:at toView:nil];
+    for (NSNumber *type in types) {
+        NSEvent *e = [NSEvent mouseEventWithType:type.unsignedIntegerValue location:p modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime
+                                    windowNumber:view.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
+        [NSApp postEvent:e atStart:NO];
+    }
+}
+
+static void click(NSView *view, NSPoint at) { mouse(view, at, @[ @(NSEventTypeLeftMouseDown), @(NSEventTypeLeftMouseUp) ]); }
+
+static NSRect onScreen(NSView *view) { return [view.window convertRectToScreen:[view convertRect:view.bounds toView:nil]]; }
+
+static id menuBar(void) {
+    id bar = [NSApp.mainMenu valueForKey:@"_menuImpl"];
+    [bar performSelector:@selector(_initTrackingSessionIfNeeded)];
+    return bar;
+}
+
+static NSView *titleView(long index) {
+    id representation = [menuBar() performSelector:@selector(activeRepresentationView)];
+    return ((id (*)(id, SEL, long))objc_msgSend)(representation, sel_registerName("subviewAtMenuIndex:"), index);
+}
+
+// A left click on menu bar title `index` (-1: the Apple menu) on the screen's top row, through the
+// menu bar's own mouse-down handler as a real one.
+static BOOL clickTitle(long index) {
+    NSView *title = titleView(index);
+    NSRect r = [title convertRect:title.bounds toView:nil];
+    NSPoint at = NSMakePoint(title.window.frame.origin.x + NSMidX(r), NSMaxY(title.window.frame));
+    NSEvent *click = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown location:at modifierFlags:0
+                                       timestamp:0 windowNumber:0 context:nil eventNumber:0 clickCount:1 pressure:1];
+    return ((BOOL (*)(id, SEL, id))objc_msgSend)([menuBar() performSelector:@selector(trackingSession)], sel_registerName("_mouseDownEventHandler:"), click);
+}
+
+extern int CGSMainConnectionID(void);
+extern int CGSGetBackgroundEventMask(int cid, uint32_t *mask);
+extern int CPSGetKeyFocusProcess(ProcessSerialNumber *psn, uint8_t *unused);
+
+// Whether this app has the keyboard, and which mouse events it gets from outside its windows.
+static void focusState(NSString *when) {
+    uint32_t mask = 0;
+    CGSGetBackgroundEventMask(CGSMainConnectionID(), &mask);
+    ProcessSerialNumber psn = {0, 0}, current = {0, kCurrentProcess};
+    uint8_t unused = 0;
+    Boolean same = 0;
+    CPSGetKeyFocusProcess(&psn, &unused);
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    SameProcess(&psn, &current, &same);
+#pragma clang diagnostic pop
+    printf("  %s: active %d, has the keyboard %d, background events 0x%x\n", when.UTF8String, NSApp.isActive, same, mask);
+}
+
+static long highlightedTitle(void) { return ((long (*)(id, SEL))objc_msgSend)(menuBar(), sel_registerName("_indexOfHighlightedViewInMenu")); }
 
 static void snapshot(NSString *name) {
     int n = 0;
+    Class glass = NSClassFromString(@"NSPopupMenuWindow");
     for (NSWindow *w in NSApp.windows) {
+        if (w.isVisible && glass && [w isKindOfClass:glass]) {
+            // AppKit's own menu (with "-"): its views, without the glass behind them.
+            NSView *view = w.contentView;
+            NSBitmapImageRep *rep = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
+            NSGraphicsContext *context = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+            [NSGraphicsContext saveGraphicsState];
+            NSGraphicsContext.currentContext = context;
+            [[NSColor colorWithWhite:0.35 alpha:1] setFill];
+            NSRectFill(view.bounds);
+            [NSGraphicsContext restoreGraphicsState];
+            [view displayRectIgnoringOpacity:view.bounds inContext:context];
+            NSString *path = [out stringByAppendingFormat:@"/%@-appkit-%d.png", name, n++];
+            [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:path atomically:YES];
+            printf("  snapshot %s (AppKit's, at %s)\n", path.UTF8String, NSStringFromRect(w.frame).UTF8String);
+            continue;
+        }
         if (w.level != 101 || !w.isVisible || ![w isKindOfClass:NSPanel.class]) continue;
         CALayer *layer = w.contentView.layer;
         CGFloat scale = w.backingScaleFactor;
@@ -81,6 +193,27 @@ static void after(double seconds, dispatch_block_t block) {
     [b.enclosingMenuItem.menu cancelTracking];
 }
 - (void)popupChanged:(NSPopUpButton *)b { printf("  POPUP ACTION now %s\n", b.titleOfSelectedItem.UTF8String); }
+- (void)appleAction:(NSMenuItem *)item { printf("  APPLE MENU ACTION %s (swallowed)\n", item.title.UTF8String); }
+- (void)segment:(NSSegmentedControl *)c { printf("  SEGMENT ACTION %ld\n", c.selectedSegment); }
+- (void)pathChosen:(NSPathControl *)c { printf("  PATH ACTION %s\n", c.clickedPathItem.title.UTF8String); }
+- (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)t { return @[ @"menu" ]; }
+- (NSArray<NSToolbarItemIdentifier> *)toolbarDefaultItemIdentifiers:(NSToolbar *)t { return @[ @"menu" ]; }
+- (NSToolbarItem *)toolbar:(NSToolbar *)t itemForItemIdentifier:(NSToolbarItemIdentifier)identifier willBeInsertedIntoToolbar:(BOOL)flag {
+    NSMenuToolbarItem *item = [[NSMenuToolbarItem alloc] initWithItemIdentifier:identifier];
+    item.label = @"Menu";
+    item.image = [NSImage imageWithSystemSymbolName:@"ellipsis.circle" accessibilityDescription:nil];
+    item.menu = [self smallMenu:@"Toolbar"];
+    return item;
+}
+- (BOOL)tokenField:(NSTokenField *)f hasMenuForRepresentedObject:(id)o { return YES; }
+- (NSMenu *)tokenField:(NSTokenField *)f menuForRepresentedObject:(id)o { return [self smallMenu:@"Token"]; }
+
+- (NSMenu *)smallMenu:(NSString *)title {
+    NSMenu *m = [[NSMenu alloc] initWithTitle:title];
+    m.delegate = self;
+    for (NSString *t in @[ @"Alpha", @"Beta", @"Gamma" ]) [self add:m title:t key:@"" mask:0];
+    return m;
+}
 
 - (NSMenuItem *)add:(NSMenu *)m title:(NSString *)title key:(NSString *)key mask:(NSEventModifierFlags)mask {
     NSMenuItem *item = [m addItemWithTitle:title action:@selector(act:) keyEquivalent:key];
@@ -125,6 +258,9 @@ static void after(double seconds, dispatch_block_t block) {
     NSString *name = scenarios[i];
     printf("=== %s\n", name.UTF8String);
     double t0 = CACurrentMediaTime();
+    // How long to wait before the next scenario: the ones that only post events return before
+    // their menu has even opened.
+    double settle = 0.3;
     if ([name isEqual:@"context"]) {
         after(0.5, ^{ snapshot(@"context"); down(); down(); });
         after(0.8, ^{ snapshot(@"context-highlight"); enter(); });
@@ -253,6 +389,167 @@ static void after(double seconds, dispatch_block_t block) {
         });
         BOOL chosen = [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(200, 200) inView:self.window.contentView];
         printf("  returned %d, Tags view still finds its item: %d\n", chosen, tags.enclosingMenuItem == row);
+    } else if ([name isEqual:@"apple"]) {
+        // The Apple menu from the key that focuses the menu bar (Control-F2): AppKit highlights the
+        // Apple title first. ← wraps around to Edit, → comes back, Return picks About This Mac.
+        after(0.4, ^{
+            which(@"apple");
+            snapshot(@"apple");
+            printf("  highlighted title %ld, the bar draws selection at %s\n", highlightedTitle(), barHighlight.UTF8String);
+            left();
+        });
+        after(0.7, ^{ printf("  after ←, highlighted title %ld\n", highlightedTitle()); right(); });
+        after(1.0, ^{ printf("  after →, highlighted title %ld\n", highlightedTitle()); enter(); });
+        unichar c = NSF2FunctionKey;
+        NSString *f2 = [NSString stringWithCharacters:&c length:1];
+        NSEvent *focus = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:NSEventModifierFlagControl
+                                         timestamp:0 windowNumber:0 context:nil characters:f2 charactersIgnoringModifiers:f2 isARepeat:NO keyCode:120];
+        [[menuBar() performSelector:@selector(trackingSession)] performSelector:@selector(handleMenuBarFocusSymbolicHotKey:) withObject:focus];
+        printf("  menu bar still tracking: %d\n", ((BOOL (*)(id, SEL))objc_msgSend)(menuBar(), sel_registerName("_isTrackingAlreadyActive")));
+        printf("  AppKit's tracking session left over: %d\n", [NSClassFromString(@"NSMenuTrackingSession") performSelector:@selector(currentSession)] != nil);
+        focusState(@"after");
+    } else if ([name isEqual:@"apple-click"]) {
+        settle = 1.5;
+        // A click on the Apple title; → moves on to the app menu, ← back. Escape.
+        after(0.4, ^{ which(@"apple-click"); snapshot(@"apple-click"); right(); });
+        after(0.7, ^{ printf("  after →, highlighted title %ld\n", highlightedTitle()); left(); });
+        after(1.0, ^{ printf("  after ←, highlighted title %ld\n", highlightedTitle()); escape(); });
+        BOOL handled = clickTitle(-1);
+        printf("  handled %d\n", handled);
+    } else if ([name isEqual:@"menubar-highlight"]) {
+        settle = 1.5;
+        // The title under an open menu is highlighted: AppKit tells the window server, which draws
+        // the menu bar, which title rects to draw the selection behind.
+        NSView *file = titleView(1);
+        printf("  File title at %s in the bar\n", NSStringFromRect(file.frame).UTF8String);
+        after(0.4, ^{ printf("  open: highlighted title %ld, the bar draws selection at %s\n", highlightedTitle(), barHighlight.UTF8String); escape(); });
+        after(0.6, ^{ printf("  closed: highlighted title %ld, the bar draws selection at %s\n", highlightedTitle(), barHighlight.UTF8String); });
+        clickTitle(1);
+    } else if ([name isEqual:@"statusitem"]) {
+        // A menu bar extra with a menu: hangs from the item, the item highlighted while it's open.
+        NSRect item = onScreen(self.status.button);
+        printf("  status item at %s\n", NSStringFromRect(item).UTF8String);
+        after(0.4, ^{
+            which(@"statusitem");
+            snapshot(@"statusitem");
+            printf("  button highlighted while open: %d\n", self.status.button.isHighlighted);
+            down(); down(); enter();
+        });
+        [self.status.button performClick:nil];
+        printf("  button highlighted after: %d\n", self.status.button.isHighlighted);
+    } else if ([name isEqual:@"inactive"]) {
+        settle = 1.5;
+        // A menu bar extra's menu in an app that isn't frontmost, as an agent's always is: the
+        // menu takes the keyboard and mouse events from elsewhere while it's open, and gives them
+        // back.
+        [NSApp hide:nil];
+        after(0.6, ^{
+            focusState(@"before");
+            after(0.4, ^{ which(@"inactive"); focusState(@"open"); down(); enter(); });
+            [self.status.button performClick:nil];
+            focusState(@"after");
+            [NSApp unhide:nil];
+            [NSApp activateIgnoringOtherApps:YES];
+        });
+    } else if ([name isEqual:@"searchfield"]) {
+        settle = 1.5;
+        // A search field's recent searches menu, from a click on its magnifier.
+        after(0.5, ^{ which(@"searchfield"); snapshot(@"searchfield"); escape(); });
+        NSRect r = [self.search.cell searchButtonRectForBounds:self.search.bounds];
+        printf("  search field at %s\n", NSStringFromRect(onScreen(self.search)).UTF8String);
+        click(self.search, NSMakePoint(NSMidX(r), NSMidY(r)));
+    } else if ([name isEqual:@"segmented"]) {
+        settle = 1.8;
+        // A segment with a menu: holding the button down on it shows the menu below the segment.
+        NSPoint at = NSMakePoint(self.segmented.bounds.size.width * 0.75, NSMidY(self.segmented.bounds));
+        after(1.0, ^{ which(@"segmented"); snapshot(@"segmented"); down(); enter(); });
+        after(1.3, ^{ mouse(self.segmented, at, @[ @(NSEventTypeLeftMouseUp) ]); });
+        printf("  segmented control at %s\n", NSStringFromRect(onScreen(self.segmented)).UTF8String);
+        mouse(self.segmented, at, @[ @(NSEventTypeLeftMouseDown) ]);
+    } else if ([name isEqual:@"pathcontrol"]) {
+        settle = 1.5;
+        // A pop-up path control.
+        after(0.5, ^{ which(@"pathcontrol"); snapshot(@"pathcontrol"); escape(); });
+        printf("  path control at %s\n", NSStringFromRect(onScreen(self.path)).UTF8String);
+        click(self.path, NSMakePoint(20, NSMidY(self.path.bounds)));
+    } else if ([name isEqual:@"combobox"]) {
+        settle = 1.5;
+        // A combo box's list (not an NSMenu: NSComboBoxWindow).
+        after(0.5, ^{
+            for (NSWindow *w in NSApp.windows)
+                if (w.isVisible && w != self.window && w != self.controls && ![w isKindOfClass:NSClassFromString(@"NSStatusBarWindow")])
+                {
+                    printf("  window up: %s level %ld at %s:", class_getName(w.class), w.level, NSStringFromRect(w.frame).UTF8String);
+                    for (NSView *v = w.contentView; v; v = v.subviews.firstObject) printf(" %s", class_getName(v.class));
+                    printf("\n");
+                }
+            which(@"combobox");
+            escape();
+        });
+        after(0.9, ^{ [self.window makeKeyAndOrderFront:nil]; });
+        [self.controls makeKeyAndOrderFront:nil];
+        [self.controls makeFirstResponder:self.combo];
+        [(NSComboBoxCell *)self.combo.cell performSelector:@selector(popUp:) withObject:nil];
+    } else if ([name isEqual:@"tokenfield"]) {
+        settle = 1.5;
+        // A token's menu, from a click on the token.
+        after(0.5, ^{ which(@"tokenfield"); snapshot(@"tokenfield"); escape(); });
+        after(0.9, ^{ [self.window makeKeyAndOrderFront:nil]; [self.window makeFirstResponder:self.text]; });
+        [self.controls makeKeyAndOrderFront:nil];
+        [self.controls makeFirstResponder:self.tokens];
+        // The token's pull-down arrow, in the field editor.
+        NSTextView *editor = (NSTextView *)self.tokens.currentEditor;
+        NSRect glyph = [editor.layoutManager boundingRectForGlyphRange:NSMakeRange(0, 1) inTextContainer:editor.textContainer];
+        glyph = NSOffsetRect(glyph, editor.textContainerOrigin.x, editor.textContainerOrigin.y);
+        NSTextAttachment *token = [editor.textStorage attribute:NSAttachmentAttributeName atIndex:0 effectiveRange:NULL];
+        NSRect arrow = ((NSRect (*)(id, SEL, NSRect))objc_msgSend)(token.attachmentCell, sel_registerName("pullDownRectForBounds:"), glyph);
+        click(editor, NSMakePoint(NSMidX(arrow), NSMidY(arrow)));
+    } else if ([name isEqual:@"toolbar"]) {
+        settle = 1.5;
+        // An NSMenuToolbarItem.
+        after(0.5, ^{ which(@"toolbar"); snapshot(@"toolbar"); down(); enter(); });
+        NSToolbarItem *item = self.controls.toolbar.items.firstObject;
+        NSView *view = [item valueForKey:@"_itemViewer"] ?: item.view;
+        printf("  toolbar item view %s\n", class_getName([view class]));
+        click(view, NSMakePoint(NSMidX(view.bounds), NSMidY(view.bounds)));
+    } else if ([name isEqual:@"rightclick"]) {
+        settle = 1.5;
+        // A real right click on the text view: NSView's rightMouseDown: → menuForEvent:.
+        after(0.5, ^{ which(@"rightclick"); snapshot(@"rightclick"); escape(); });
+        NSPoint p = [self.text convertPoint:NSMakePoint(30, 10) toView:nil];
+        for (NSNumber *type in @[ @(NSEventTypeRightMouseDown), @(NSEventTypeRightMouseUp) ]) {
+            NSEvent *e = [NSEvent mouseEventWithType:type.unsignedIntegerValue location:p modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime
+                                        windowNumber:self.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
+            [NSApp postEvent:e atStart:NO];
+        }
+    } else if ([name isEqual:@"palette"]) {
+        // A palette (inline, horizontal) submenu, as in Finder's tags.
+        NSMenu *m = [self smallMenu:@"Palette"];
+        NSMenuItem *colors = [[NSMenuItem alloc] initWithTitle:@"Colors" action:nil keyEquivalent:@""];
+        colors.submenu = [[NSMenu alloc] initWithTitle:@"Colors"];
+        for (NSString *symbol in @[ @"circle.fill", @"square.fill", @"triangle.fill" ]) {
+            NSMenuItem *item = [self add:colors.submenu title:symbol key:@"" mask:0];
+            item.image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:nil];
+        }
+        if (@available(macOS 14, *)) colors.submenu.presentationStyle = NSMenuPresentationStylePalette;
+        [m insertItem:colors atIndex:1];
+        // Ours shows it as a submenu: ↓ ↓ → opens it, Return picks its first item.
+        after(0.4, ^{ down(); down(); right(); });
+        after(0.8, ^{ which(@"palette"); snapshot(@"palette"); enter(); });
+        BOOL chosen = [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(200, 200) inView:self.window.contentView];
+        printf("  returned %d\n", chosen);
+    } else if ([name isEqual:@"services"]) {
+        settle = 1.5;
+        // The app menu's Services submenu, filled by the system.
+        after(0.4, ^{ for (int k = 0; k < 2; k++) down(); right(); });
+        after(0.9, ^{ which(@"services"); snapshot(@"services"); escape(); });
+        clickTitle(0);
+    } else if ([name isEqual:@"share"]) {
+        settle = 1.5;
+        // The share menu (NSSharingServicePicker).
+        after(0.8, ^{ which(@"share"); snapshot(@"share"); escape(); });
+        NSSharingServicePicker *picker = [[NSSharingServicePicker alloc] initWithItems:@[ @"hello" ]];
+        [picker showRelativeToRect:self.popup.bounds ofView:self.popup preferredEdge:NSRectEdgeMinY];
     } else if ([name isEqual:@"frames"]) {
         // The opening animation, frame by frame.
         for (int f = 0; f < 8; f++) after(0.02 + f * 0.035, ^{ snapshot([NSString stringWithFormat:@"frames-%02d", f]); });
@@ -260,7 +557,7 @@ static void after(double seconds, dispatch_block_t block) {
         [NSMenu popUpContextMenu:[self richMenu] withEvent:[self rightClickAt:NSMakePoint(60, 260)] forView:self.window.contentView];
     }
     printf("  (%.2fs)\n", CACurrentMediaTime() - t0);
-    after(0.3, ^{ [self run:scenarios index:i + 1]; });
+    after(settle, ^{ [self run:scenarios index:i + 1]; });
 }
 @end
 
@@ -288,7 +585,23 @@ int main(int argc, char **argv) {
             for (NSString *item in [spec subarrayWithRange:NSMakeRange(1, spec.count - 1)])
                 [host add:title.submenu title:item key:[[item substringToIndex:1] lowercaseString] mask:NSEventModifierFlagCommand];
         }
+        NSMenuItem *services = [[NSMenuItem alloc] initWithTitle:@"Services" action:nil keyEquivalent:@""];
+        services.submenu = [[NSMenu alloc] initWithTitle:@"Services"];
+        NSApp.servicesMenu = services.submenu;
+        [main.itemArray[0].submenu addItem:NSMenuItem.separatorItem];
+        [main.itemArray[0].submenu addItem:services];
         NSApp.mainMenu = main;
+        Method settings = class_getClassMethod(NSClassFromString(@"NSCGSSpace"), sel_registerName("setMenuBarSettings:globalSettings:"));
+        if (settings) originalSetMenuBarSettings = method_setImplementation(settings, (IMP)recordMenuBarSettings);
+        // The Apple menu's items would really sleep, restart or log out.
+        Class appleMenu = NSClassFromString(@"_NSAppleMenu");
+        unsigned count;
+        Method *methods = class_copyMethodList(appleMenu, &count);
+        for (unsigned k = 0; k < count; k++) {
+            const char *name = sel_getName(method_getName(methods[k]));
+            if (name[0] == '_' && strstr(name, "Requested:")) method_setImplementation(methods[k], method_getImplementation(class_getInstanceMethod(Host.class, @selector(appleAction:))));
+        }
+        free(methods);
         host.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(300, 300, 480, 320) styleMask:NSWindowStyleMaskTitled
                                                     backing:NSBackingStoreBuffered defer:NO];
         host.popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(20, 20, 150, 26) pullsDown:NO];
@@ -304,6 +617,46 @@ int main(int argc, char **argv) {
         host.text = [[NSTextView alloc] initWithFrame:NSMakeRect(20, 70, 300, 100)];
         host.text.string = @"hello world";
         [host.window.contentView addSubview:host.text];
+        // The other controls that show menus, in a window of their own with a toolbar.
+        host.controls = [[NSWindow alloc] initWithContentRect:NSMakeRect(820, 300, 480, 220) styleMask:NSWindowStyleMaskTitled
+                                                      backing:NSBackingStoreBuffered defer:NO];
+        NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"devhost"];
+        toolbar.delegate = host;
+        host.controls.toolbar = toolbar;
+        host.search = [[NSSearchField alloc] initWithFrame:NSMakeRect(20, 170, 200, 24)];
+        host.search.recentsAutosaveName = nil;
+        NSMenu *template = [[NSMenu alloc] initWithTitle:@"Search"];
+        [template addItemWithTitle:@"Recent Searches" action:nil keyEquivalent:@""].tag = NSSearchFieldRecentsTitleMenuItemTag;
+        [template addItemWithTitle:@"" action:nil keyEquivalent:@""].tag = NSSearchFieldRecentsMenuItemTag;
+        [template addItem:NSMenuItem.separatorItem];
+        [template addItemWithTitle:@"Clear Recents" action:nil keyEquivalent:@""].tag = NSSearchFieldClearRecentsMenuItemTag;
+        [(NSSearchFieldCell *)host.search.cell setSearchMenuTemplate:template];
+        host.search.recentSearches = @[ @"menus", @"glass" ];
+        [host.controls.contentView addSubview:host.search];
+        host.segmented = [NSSegmentedControl segmentedControlWithLabels:@[ @"Plain", @"With Menu" ] trackingMode:NSSegmentSwitchTrackingMomentary
+                                                                 target:host action:@selector(segment:)];
+        host.segmented.frame = NSMakeRect(240, 170, 200, 24);
+        [host.segmented setMenu:[host smallMenu:@"Segment"] forSegment:1];
+        [host.segmented setShowsMenuIndicator:YES forSegment:1];
+        [host.controls.contentView addSubview:host.segmented];
+        host.path = [[NSPathControl alloc] initWithFrame:NSMakeRect(20, 120, 200, 26)];
+        host.path.pathStyle = NSPathStylePopUp;
+        host.path.URL = [NSURL fileURLWithPath:@"/System/Library"];
+        host.path.target = host;
+        host.path.action = @selector(pathChosen:);
+        [host.controls.contentView addSubview:host.path];
+        host.combo = [[NSComboBox alloc] initWithFrame:NSMakeRect(240, 120, 200, 26)];
+        [host.combo addItemsWithObjectValues:@[ @"One", @"Two", @"Three" ]];
+        [host.controls.contentView addSubview:host.combo];
+        host.tokens = [[NSTokenField alloc] initWithFrame:NSMakeRect(20, 70, 300, 26)];
+        host.tokens.delegate = host;
+        host.tokens.objectValue = @[ @"token" ];
+        [host.controls.contentView addSubview:host.tokens];
+        [host.controls orderFront:nil];
+        host.status = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
+        host.status.button.title = @"devhost";
+        host.status.menu = [host smallMenu:@"Status"];
+
         [host.window makeKeyAndOrderFront:nil];
         [host.window makeFirstResponder:host.text];
         [NSApp activateIgnoringOtherApps:YES];
@@ -311,7 +664,9 @@ int main(int argc, char **argv) {
         NSMutableArray *scenarios = [NSMutableArray array];
         for (int i = 3; i < argc; i++) [scenarios addObject:@(argv[i])];
         if (scenarios.count == 0)
-            [scenarios addObjectsFromArray:@[ @"context", @"submenu", @"positioning", @"escape", @"popup", @"pulldown", @"textview", @"cancel", @"menubar", @"menubar-click", @"menubar-monitor", @"menubar-stray", @"customview" ]];
+            [scenarios addObjectsFromArray:@[ @"context", @"submenu", @"positioning", @"escape", @"popup", @"pulldown", @"textview", @"cancel", @"menubar", @"menubar-click", @"menubar-monitor", @"menubar-stray", @"customview",
+                                                        @"apple", @"apple-click", @"menubar-highlight", @"statusitem", @"searchfield", @"segmented",
+                                                        @"pathcontrol", @"tokenfield", @"toolbar", @"rightclick", @"palette", @"services", @"inactive" ]];
         if (injected) {
             __block int waited = 0;
             __block void (^wait)(void);

@@ -9,18 +9,33 @@ this, then `architecture.md`, `appkit-internals.md` and `testing.md`. Keep it cu
 - **Works, confirmed by the user after a reboot**: context menus, pop-up and pull-down buttons,
   menu bar menus, in every app with a UI: Obsidian, kitty, Finder (including its tag row), Helium,
   ErisDock, and system UI.
+- **New since, devhost-verified only (not installed yet; the user runs `sudo target/dist/erismenus
+  install`)**:
+  - the Apple menu is ours (click, ← →, Control-F2);
+  - menu bar extras' menus hang from the item flush with the bar; the item highlights (AppKit's
+    `popUpStatusBarMenu:` does that around `presentPopup:`);
+  - `sys::Tracking`: menus take the keyboard and background mouse events like AppKit's
+    `_setupMenuTracking`. Before, a menu bar extra's menu in an agent app (or a context menu in a
+    window behind) couldn't be used from the keyboard and didn't close on a click elsewhere
+    (checked: the old build in the `inactive` scenario never got the keyboard);
+  - after Control-F2, AppKit's begun session is ended (it used to stay current, holding the
+    background event mask);
+  - the menu bar title highlight works: the window server is told the title's rect
+    (`menuBarMenuTitlesArray`) while open, and nothing after. Not seen on screen.
+  - search field, segmented control, path control, token field, toolbar item, right click and
+    Services menus were all already ours (now scenarios).
 - **Installed** build: `ErisMenusBuild1793682636` (matches commit `1feffa2`). The daemon is a
   system LaunchDaemon (`io.github.eriskii.erismenus`) and survives reboots.
 - **Repos**, all public GPL-3.0-or-later, pushed, under `Eris <13102203+Eriskii@users.noreply.github.com>`:
   - `Eriskii/ErisMenus`, the monorepo's `apps/ErisMenus` submodule;
   - `Eriskii/ErisMacInjectLib`, the monorepo's `libs/ErisMacInjectLib` submodule;
   - `Eriskii/apple-sharpenerer` (outside the monorepo, at `../apple-sharpenerer`), which also loads
-    through the lib;
-  - both depend on the lib by git tag (`v0.1.0`), as every Eris Rust project does; inside the
-    monorepo `.cargo/config.toml` patches it to `libs/ErisMacInjectLib`. A lib change both need is a
-    new tag;
+    through the lib, by a local path dependency (`../ErisMonorepo/libs/ErisMacInjectLib`);
   - `Eriskii/ErisMonorepo` records both submodules.
-- 13 devhost scenarios pass; `menus-core` has 24 unit tests; the lib has 5.
+- 26 devhost scenarios pass (the default set); `menus-core` has 27 unit tests; the lib has 5.
+- Another agent works on removing Liquid Glass elsewhere (Control Center's modules, which aren't
+  NSMenus) on branch `glass`, worktree `apps/ErisMenus-glass`; its devhost runs show up in the log
+  ("painting over glass") and can steal focus from ours mid-run.
 
 ## Working with this user
 
@@ -67,18 +82,22 @@ this, then `architecture.md`, `appkit-internals.md` and `testing.md`. Keep it cu
 
 ## Next (none started)
 
-- **Apple menu**: not one of the main menu's items; AppKit still draws it (glass). Find where the
-  bar keeps it (`+[NSMenuBarImpl appleMenuItem]`, the representation's special index) and add it
-  to `titles()`.
-- **Menu bar extras' menus** (status items on the right): probably `presentPopup:` or a
-  status-bar path; unverified. Check with an agent app that has an `NSStatusItem` menu.
+- **Help menu search**: AppKit's Help menu has a search field row (not an item; see
+  `appkit-internals.md`); ours has none. Would need a field in our panel that gets the keys, and
+  results from the main menu's items (and help books).
+- **Palette submenus** (`NSMenuPresentationStylePalette`) open as ordinary submenus; AppKit draws
+  them inline as a row of images. An inline row with ← → between its cells would match.
+- **Not menus, still AppKit's look**: NSComboBox's list (`NSComboBoxWindow`, a visual effect
+  view), the share picker (a popover), Control Center's modules (the other agent).
+- Status item keyboard navigation between menu bar extras (`+[NSStatusBarButtonCell
+  _trackNavigationLoopOnMenu:view:]`) isn't replicated.
 - **Hover tooltips**, if the user wants them: AppKit's tooltip window (`NSToolTipManager`,
   `_NSToolTipWindow`/panel) would need the same treatment.
-- Title highlight in the menu bar (`setHighlightedView:`) has never been seen; ask the user if
-  the clicked title lights up.
 - Long menus scroll with the wheel and keyboard, but there are no scroll arrows and no hover
   auto-scroll.
 - Accessibility (VoiceOver) for our panels: none.
 - Settings: animation style and colors are compiled in (`Style::default()`, `style.rs`); a config
   like ErisDock's (`~/.config/…`, Darwin-notify hot reload as sharpenerer does) would fit.
+- apple-sharpenerer's path dependency on the lib: switch to a git dependency so its repo builds
+  on its own.
 - Possibly someday: the out-of-process route (TrustedUIService), see `appkit-internals.md`.

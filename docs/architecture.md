@@ -29,14 +29,17 @@ keyboard while it's open. It runs inside every app, loaded by a root daemon.
   hooks over it, so reinstalling updates running apps.
 - `session.rs`: one menu interaction from open to close. `present()` handles popped-up menus,
   `track_menu_bar()` the menu bar. Both run the same modal loop (`Session::track`), with a stack
-  of `Level`s (the menu and its open submenus) and, for the menu bar, a `MenuBar` of titles.
+  of `Level`s (the menu and its open submenus) and, for the menu bar, a `MenuBar` of titles (the
+  Apple menu and the main menu's items, left to right).
 - `panel.rs`: one open menu on screen: a borderless `NSPanel` at level 101, a layer-hosting view
   drawing the body (`CAShapeLayer`, smoothed corners, shadow), rows (`CATextLayer`s, image layers,
   separators) and the highlight, plus a container view holding items' own views.
 - `model.rs`: a menu's items as rows: hidden items out, separators tidied, alternates folded into
   the row they replace, each retained.
 - `style.rs`: colors, fonts, attributed strings, SF Symbols.
-- `sys.rs`: CoreGraphics geometry, paths, colors, the clock.
+- `sys.rs`: CoreGraphics geometry, paths, colors, the clock, and `Tracking`: what AppKit's
+  `_setupMenuTracking` does with the window server while a menu is open (background mouse events,
+  the keyboard, HIToolbox's menu tracking notifications), undone when dropped.
 
 ### Hooks
 
@@ -44,7 +47,7 @@ keyboard while it's open. It runs inside every app, loaded by a root daemon.
 |---|---|
 | `+[NSContextMenuImpl presentPopup:fromView:withContext:animated:]` | Every popped-up menu goes through it: context menus, `popUpMenuPositioningItem:`, pop-up and pull-down buttons. |
 | `-[NSMenuBarTrackingSession _mouseDownEventHandler:]` | A click on the menu bar. AppKit opens its own menu inside this handler, so it has to be taken over here. |
-| `-[NSMenuTrackingSession startMonitoringEvents:]` | The menu bar's modal loop, reached without a click (Control-F2). |
+| `-[NSMenuTrackingSession startMonitoringEvents:]` | The menu bar's modal loop, reached without a click (Control-F2). AppKit has begun its session by then; we end it (`dismissAnimated:`) after ours. |
 | `-[NSMenuBarTrackingSession _handleMonitorEvent:]` | AppKit's local event monitor for the menu bar; it stands aside while we track, or it acts on events our loop dequeues. |
 | `-[NSCocoaMenuImpl _cancelTrackingWithAnimation:]` | `-[NSMenu cancelTracking]`, honored only for menus we have open. |
 | `-[NSCocoaMenuImpl highlightedItem]` | `-[NSMenu highlightedItem]` while we track. |
@@ -63,7 +66,9 @@ The same AppKit calls, in AppKit's order, so delegates and the app can't tell th
    is also what makes `popUpMenuPositioningItem:` return YES.
 
 Submenus get steps 1–4 on their own impls. `NSMenuDidBeginTrackingNotification` and
-`NSMenuDidEndTrackingNotification` are posted around the whole thing.
+`NSMenuDidEndTrackingNotification` are posted around the whole thing, and `sys::Tracking` is held
+for it: like AppKit, the app gets mouse events from anywhere and the keyboard while the menu is
+open, even when it isn't frontmost, and HIToolbox's cancel-tracking notification closes the menu.
 
 ### The loop
 
@@ -75,9 +80,11 @@ losing focus, choosing an item or a cancel for one of our menus ends it; the log
 
 Opening a menu: `Anchor` comes from the `NSMenuContext`: a pop-up button's bounds
 (`popupButtonBounds`, flipped screen coordinates) with its checked item over the button; a
-positioned item (`checkedItemIndex` at `frameAlignmentPoint`); otherwise the menu's top-left at
+positioned item (`checkedItemIndex` at `frameAlignmentPoint`); hanging from the `exclusionRect`
+when `frameAlignmentPoint` is inside it (a menu bar extra's item); otherwise the menu's top-left at
 `frameAlignmentPoint`, flipping up or left when there's no room. Pull-downs (`flags & 8`) leave out
-item 0. Submenus open beside their row; menu bar menus hang from their title.
+item 0. Submenus open beside their row; menu bar menus hang from their title (`Anchor::Below`,
+right up against the bar, right edges lined up near the screen's right).
 
 ## The daemon
 

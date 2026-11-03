@@ -7,9 +7,15 @@ does. ErisMenus only shows the menu and tracks it, so the app sees exactly what 
 AppKit's menus. Rust, `no_std`, loaded into every app by a root daemon.
 
 - **Every popped-up menu**: context menus, `popUpMenuPositioningItem:`, pop-up buttons (the
-  chosen item over the button) and pull-downs (without their title item).
-- **The menu bar**: a title's menu hangs from the bar, and moving across the titles or pressing
-  ← and → switches menus. Clicking the open title closes it. The Apple menu is still AppKit's.
+  chosen item over the button) and pull-downs (without their title item), and the menus of search
+  fields, segmented controls, path controls, token fields, toolbar items and the Services menu.
+- **The menu bar**, the Apple menu included: a title's menu hangs from the bar under its
+  highlighted title, and moving across the titles or pressing ← and → switches menus. Clicking the
+  open title closes it. Control-F2 starts at the Apple menu.
+- **Menu bar extras** (an app's `NSStatusItem` menus) hang from the item, which stays highlighted
+  while its menu is open. Like AppKit's, a menu takes the keyboard and sees clicks elsewhere even in
+  an app that isn't frontmost, so an agent's menu works from the keyboard and closes on a click
+  outside it.
 - **Rows**: titles (attributed ones keep their fonts), images (templates tinted), checkmarks and
   mixed states, key equivalents as ⌃⌥⇧⌘ glyphs, section headers, subtitles, indentation,
   separators, and submenus with a chevron. Alternates swap in while their modifiers are held.
@@ -41,10 +47,18 @@ menu's impl in AppKit's order:
    `popUpMenuPositioningItem:` return YES.
 
 The menu bar is tracked by its own modal loop instead, which starts in
-`-[NSMenuTrackingSession startMonitoringEvents:]` on an `NSMenuBarTrackingSession`. ErisMenus runs
-its own loop there, opening each title's menu with the same lifecycle, keeping the title
-highlighted with `-[NSMenuBarImpl setHighlightedView:]`, and finding the titles on screen with
-`frameForViewAtMenuIndex:`.
+`-[NSMenuBarTrackingSession _mouseDownEventHandler:]` (a click) or
+`-[NSMenuTrackingSession startMonitoringEvents:]` (Control-F2). ErisMenus runs its own loop there,
+opening each title's menu with the same lifecycle, keeping the title highlighted with
+`-[NSMenuBarImpl setHighlightedView:]` (AppKit passes the title's rect on to the window server,
+which draws the bar and its selection), and finding the titles on screen among the menu bar's
+`NSMenuBarItemView`s. The Apple menu isn't one of the main menu's items: it's
+`+[NSMenuBarImpl appleMenuItem]`, at index -1 in the bar.
+
+While a menu is open ErisMenus also does what AppKit's `-[NSMenuTrackingSession
+_setupMenuTracking]` does: it asks the window server for mouse events from outside the app's
+windows, takes the keyboard if another app has it, and posts and listens for HIToolbox's
+begin/end/cancel menu tracking notifications.
 
 `-[NSMenu cancelTracking]` and `-[NSMenu highlightedItem]` are answered from the running menu, and
 the delegate hears `menu:willHighlightItem:`. Submenus get the same lifecycle on their own impls.
@@ -94,11 +108,12 @@ make devhost
 target/dist/devhost target/dist/liberismenus.dylib /tmp/menus
 ```
 
-The development host loads the dylib, pops up a context menu, a submenu, a positioned menu, a
-pop-up button, a pull-down and NSTextView's own menu, and drives them with key presses. It prints
-what the app hears back and draws each menu into a PNG in the output folder. Name scenarios to run
-some (`context submenu positioning escape popup pulldown textview cancel menubar frames`), or pass `-`
-instead of the dylib to see AppKit's own menus. The payload logs to the unified log:
+The development host loads the dylib, opens every kind of menu it knows (context menus,
+submenus, positioned menus, pop-up buttons and pull-downs, NSTextView's menu, the menu bar and the
+Apple menu, a menu bar extra, and the menus of other controls), and drives them with key presses
+and posted clicks. It prints what the app hears back, whose menu came up (ours or AppKit's), and
+draws each menu into a PNG in the output folder. Name scenarios to run some (the list is in
+[`docs/testing.md`](docs/testing.md)), or pass `-` instead of the dylib to see AppKit's own menus. The payload logs to the unified log:
 `log stream --predicate 'eventMessage BEGINSWITH "[ErisMenus]"'`.
 
 ## More

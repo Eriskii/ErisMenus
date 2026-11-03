@@ -254,6 +254,11 @@ pub enum Anchor {
     Button { bounds: Rect, row: usize },
     /// Beside a row of its parent (submenus), its first row level with that row.
     Beside { row: Rect, parent: Rect },
+    /// Hanging from the bottom of a rect it mustn't cover, left edges lined up (a menu bar title,
+    /// a menu bar extra); right edges lined up instead when there's no room to the right, and
+    /// above the rect when there's none below. It may touch the rect even inside the screen's
+    /// margin, as the menu bar is.
+    Below(Rect),
 }
 
 /// Which way a menu opened, which is the corner it unrolls from.
@@ -309,9 +314,26 @@ pub fn place(layout: &MenuLayout, anchor: Anchor, screen: Rect) -> Placement {
             }
             (x, top - h)
         }
+        Anchor::Below(r) => {
+            let mut x = r.x;
+            let mut y = r.y - h;
+            if x + w > area.max_x() && r.max_x() - w >= area.x {
+                x = r.max_x() - w;
+                opening.left = true;
+            }
+            if y < area.y && r.max_y() + h <= area.max_y() {
+                y = r.max_y();
+                opening.up = true;
+            }
+            (x, y)
+        }
+    };
+    let top = match anchor {
+        Anchor::Below(r) if !opening.up => area.max_y().max(r.y),
+        _ => area.max_y(),
     };
     x = x.min(area.max_x() - w).max(area.x);
-    y = y.min(area.max_y() - h).max(area.y);
+    y = y.min(top - h).max(area.y);
     Placement { frame: Rect::new(math::round(x), math::round(y), w, h), opening }
 }
 
@@ -329,6 +351,34 @@ mod tests {
             RowSpec { submenu: true, ..RowSpec::item(60.0) },
         ];
         lay_out(&rows, &Metrics::default(), 0.0, 900.0, 2000.0)
+    }
+
+    #[test]
+    fn below_hangs_from_the_menu_bar() {
+        let l = menu();
+        // A title in the menu bar, whose bottom is the visible frame's top.
+        let title = Rect::new(400.0, 1130.0, 60.0, 39.0);
+        let p = place(&l, Anchor::Below(title), SCREEN);
+        assert_eq!((p.frame.x, p.frame.max_y()), (400.0, 1130.0));
+        assert_eq!(p.opening, Opening::default());
+    }
+
+    #[test]
+    fn below_lines_up_right_edges_at_the_screens_right() {
+        let l = menu();
+        let item = Rect::new(1740.0, 1130.0, 40.0, 39.0);
+        let p = place(&l, Anchor::Below(item), SCREEN);
+        assert_eq!((p.frame.max_x(), p.frame.max_y()), (1780.0, 1130.0));
+        assert!(p.opening.left);
+    }
+
+    #[test]
+    fn below_goes_above_without_room_underneath() {
+        let l = menu();
+        let field = Rect::new(300.0, 20.0, 200.0, 24.0);
+        let p = place(&l, Anchor::Below(field), SCREEN);
+        assert_eq!((p.frame.x, p.frame.y), (300.0, 44.0));
+        assert!(p.opening.up);
     }
 
     #[test]

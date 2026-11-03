@@ -60,6 +60,11 @@ static MONITOR: Original = Original::new();
 extern "C" fn start_monitoring_events(this: Id, cmd: Sel, event: Id) {
     let menu_bar = msg!(bool; this, c"isKindOfClass:", class(c"NSMenuBarTrackingSession") => Id);
     if menu_bar && session::track_menu_bar(event) {
+        // AppKit began this session before handing it the loop (Control-F2 does); end it as
+        // AppKit would, or it stays current, holding on to the mouse events from other apps.
+        if msg!(Id; class(c"NSMenuTrackingSession"), c"currentSession") == this {
+            msg!((); this, c"dismissAnimated:", false => bool);
+        }
         return;
     }
     let original: extern "C" fn(Id, Sel, Id) = unsafe { transmute(MONITOR.get()) };

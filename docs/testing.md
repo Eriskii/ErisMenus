@@ -16,8 +16,17 @@ target/dist/devhost target/dist/liberismenus.dylib /tmp/menus [scenario ...]
 
 It `dlopen`s the dylib (or nothing, given `-`, to see AppKit's own menus), registers
 `ErisMenusIgnorePointer` so the real pointer doesn't interfere, opens a window with a pop-up button,
-a pull-down, a text view and a main menu, and runs scenarios. Each prints what the app hears
-(delegate calls, actions, return values) and renders the open menus to PNGs with `renderInContext:`.
+a pull-down and a text view, a second window with other controls that show menus and a toolbar, a
+menu bar extra (a status item titled "devhost") and a main menu, and runs scenarios.
+Each prints what the app hears (delegate calls, actions, return values) and renders the open menus
+to PNGs with `renderInContext:`. The newer ones also print whose menu came up ("1 of our menus, 0
+of AppKit's", with the windows' frames) and, with `-`, render AppKit's menu window too
+(`<name>-appkit-N.png`, its views without the glass), to compare placement and content.
+
+The Apple menu's actions are swallowed and printed (`APPLE MENU ACTION …`): devhost replaces
+`_NSAppleMenu`'s `…Requested:` methods, or the `apple` scenario would open About This Mac and
+others could sleep or restart the Mac. The menu bar's selection is read from what AppKit sends the
+window server (`+[NSCGSSpace setMenuBarSettings:globalSettings:]`, swizzled to record it).
 
 | Scenario | Checks |
 |---|---|
@@ -32,9 +41,25 @@ a pull-down, a text view and a main menu, and runs scenarios. Each prints what t
 | `menubar-monitor` | A second menu bar click while ours is open must not reach AppKit (the Helium crash). |
 | `menubar-stray` | A click below a title, not on the bar, must open nothing. |
 | `customview` | An item with its own view (a button) is shown and clicked through our panel. |
+| `apple` | Control-F2 the way AppKit does it: the Apple menu opens under its highlighted title; ← wraps to Edit, → back, Return picks About This Mac; AppKit's session is ended afterwards. |
+| `apple-click` | A click on the Apple title; → moves to the app menu, ← back, Escape. |
+| `menubar-highlight` | The selection the window server is told to draw while File is open, and that it's gone after. |
+| `statusitem` | A menu bar extra's menu: hangs from the item (top at the bar's bottom), the button highlighted while it's open; ↓↓ Return picks Beta. |
+| `inactive` | The same with the app hidden (not frontmost, as an agent always is): the menu has the keyboard and background mouse events while open, and gives both back. |
+| `searchfield` | NSSearchField's recent searches menu, from a click on the magnifier. |
+| `segmented` | A segment's menu, from a held press. |
+| `pathcontrol` | A pop-up NSPathControl. |
+| `tokenfield` | A token's menu, from a click on its pull-down arrow. |
+| `toolbar` | An `NSMenuToolbarItem`. |
+| `rightclick` | A posted right click on the text view (`rightMouseDown:` → `menuForEvent:`). |
+| `palette` | A palette submenu (AppKit shows it inline; ours, as a submenu): ↓↓ → Return. |
+| `services` | The app menu's Services submenu, filled by the system. |
+| `combobox`, `share` | Not menus (NSComboBox's list window, the share popover); they print what came up instead. |
 | `frames` | Snapshots of the opening animation. |
 
-With no scenarios named it runs all but `frames`. Every one should print an ACTION or a return
+With no scenarios named it runs all but `combobox`, `share` and `frames`. Scenarios driven by posted
+clicks return before their menu opens and wait 1.5 s for it. A real person (or another agent's
+devhost) making another app frontmost mid-run ends menu bar menus with "the app lost focus"; rerun. Every one should print an ACTION or a return
 value; `make devhost` sometimes leaves a stale binary, so after editing `devhost.m` build it with
 `clang -fobjc-arc -framework AppKit -framework QuartzCore tools/devhost.m -o target/dist/devhost`.
 

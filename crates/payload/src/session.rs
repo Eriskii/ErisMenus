@@ -60,6 +60,14 @@ pub fn cancel(impl_: Id) -> bool {
     true
 }
 
+/// The system's request that every menu close (HIToolbox's cancel-tracking notification).
+extern "C" fn close_all(_: *const c_void, _: *const c_void, _: *const c_void, _: *const c_void, _: *const c_void) {
+    if active() {
+        log!("the system asked every menu to close");
+        CANCELLED.store(true, Ordering::Release);
+    }
+}
+
 /// The impls of the menus we have open.
 static OPEN: SpinLock<Vec<usize>> = SpinLock::new(Vec::new());
 
@@ -86,7 +94,9 @@ pub fn present(impl_: Id, _view: Id, context: Id) -> bool {
     ACTIVE.store(impl_, Ordering::Release);
     CANCELLED.store(false, Ordering::Release);
     let menu = retain(menu);
+    let tracking = sys::Tracking::begin(close_all);
     autoreleasing(|| run(impl_, menu, context));
+    drop(tracking);
     release(menu);
     HIGHLIGHTED.store(core::ptr::null_mut(), Ordering::Release);
     ACTIVE.store(core::ptr::null_mut(), Ordering::Release);
@@ -101,8 +111,10 @@ struct MenuBar {
 }
 
 struct Title {
-    /// The item's index in the main menu.
+    /// The item's index in the main menu; -1 for the Apple menu, which isn't one of its items.
     index: isize,
+    /// The main menu's item, or the Apple menu's (`+[NSMenuBarImpl appleMenuItem]`).
+    item: Id,
     /// On screen.
     rect: Rect,
 }
@@ -140,8 +152,11 @@ fn track_menu_bar_now(event: Id) -> bool {
     let keyboard = !event.is_null() && msg!(usize; event, c"type") == KEY_DOWN;
     let titles = titles(bar, menu);
     let start = if keyboard {
+        // Control-F2 highlights the Apple menu first; with nothing highlighted, start at the app's
+        // menu.
         let highlighted = msg!(isize; bar, c"_indexOfHighlightedViewInMenu");
-        Some(titles.iter().position(|t| t.index == highlighted).unwrap_or(0))
+        let first = titles.iter().position(|t| t.index >= 0).unwrap_or(0);
+        Some(titles.iter().position(|t| t.index == highlighted).unwrap_or(first))
     } else {
         // Only a click that's really on a title. AppKit hands this handler other clicks too, and
         // its own idea of the title under the pointer only goes by x.
@@ -155,11 +170,14 @@ fn track_menu_bar_now(event: Id) -> bool {
         return false;
     };
     log!(
-        "menu bar {} at {:.0},{:.0}: opening title {}",
+        "menu bar {} at {:.0},{:.0}: opening {}",
         if keyboard { "focused" } else { "clicked" },
         mouse.x,
         mouse.y,
-        titles[start].index,
+        match titles[start].index {
+            -1 => String::from("the Apple menu"),
+            index => alloc::format!("title {index}"),
+        },
     );
     // On some paths AppKit has already opened the title's menu by now.
     if !msg!(Id; bar, c"deepestPresentedSubmenu").is_null() {
@@ -168,7 +186,9 @@ fn track_menu_bar_now(event: Id) -> bool {
     ACTIVE.store(bar, Ordering::Release);
     CANCELLED.store(false, Ordering::Release);
     let menu = retain(menu);
+    let tracking = sys::Tracking::begin(close_all);
     autoreleasing(|| run_menu_bar(bar, menu, titles, start, keyboard));
+    drop(tracking);
     release(menu);
     HIGHLIGHTED.store(core::ptr::null_mut(), Ordering::Release);
     ACTIVE.store(core::ptr::null_mut(), Ordering::Release);
@@ -187,20 +207,27 @@ fn click_location(event: Id) -> Option<Point> {
     Some(Point::new(origin.x + p.x, origin.y + p.y))
 }
 
-/// The main menu's titles that open a menu, where the menu bar shows them on screen.
+/// The menu bar's titles that open a menu, where the menu bar shows them on screen, left to right:
+/// the Apple menu and the main menu's items.
 fn titles(bar: Id, menu: Id) -> Vec<Title> {
     let representation = msg!(Id; bar, c"activeRepresentationView");
     if representation.is_null() {
         return Vec::new();
     }
+    let apple = if responds(class(c"NSMenuBarImpl"), c"appleMenuItem") {
+        msg!(Id; class(c"NSMenuBarImpl"), c"appleMenuItem")
+    } else {
+        NIL
+    };
     let count = msg!(isize; menu, c"numberOfItems");
-    (0..count)
+    let mut titles: Vec<Title> = (-1..count)
         .filter_map(|index| {
-            let item = msg!(Id; menu, c"itemAtIndex:", index => isize);
-            if msg!(bool; item, c"isHidden") || msg!(Id; item, c"submenu").is_null() {
+            let item = if index < 0 { apple } else { msg!(Id; menu, c"itemAtIndex:", index => isize) };
+            if item.is_null() || msg!(bool; item, c"isHidden") || msg!(Id; item, c"submenu").is_null() {
                 return None;
             }
-            // The titles are views in the menu bar's own window (NSMenuBarReplicantWindow).
+            // The titles are views in the menu bar's own window (NSMenuBarReplicantWindow); the
+            // Apple menu's is at index -1.
             let view = msg!(Id; representation, c"subviewAtMenuIndex:", index => isize);
             let window = if view.is_null() { NIL } else { msg!(Id; view, c"window") };
             if window.is_null() {
@@ -212,9 +239,11 @@ fn titles(bar: Id, menu: Id) -> Vec<Title> {
             // screen, but its frame is right.
             let origin = msg!(CGRect; window, c"frame").origin;
             let rect = Rect::new(origin.x + r.origin.x, origin.y + r.origin.y, r.size.width, r.size.height);
-            (rect.width > 0.0 && rect.height > 0.0).then_some(Title { index, rect })
+            (rect.width > 0.0 && rect.height > 0.0).then_some(Title { index, item, rect })
         })
-        .collect()
+        .collect();
+    titles.sort_by(|a, b| a.rect.x.total_cmp(&b.rect.x));
+    titles
 }
 
 fn run_menu_bar(bar: Id, menu: Id, titles: Vec<Title>, start: usize, keyboard: bool) {
@@ -292,9 +321,13 @@ fn run(impl_: Id, menu: Id, context: Id) {
         .and_then(|item| rows.iter().position(|r| r.items().any(|i| i == item)));
     let align: Point = msg!(CGPoint; context, c"frameAlignmentPoint").into();
     let button = unflip(msg!(CGRect; context, c"popupButtonBounds").into());
+    // What the menu mustn't cover. A menu bar extra's menu comes with the item's rect and a point
+    // a little way up inside it, which AppKit's own menu window is drawn down from.
+    let keep_clear: Rect = msg!(CGRect; context, c"exclusionRect").into();
     let anchor = match checked_row {
         Some(row) if !button.is_empty() => Anchor::Button { bounds: button, row },
         Some(row) => Anchor::Row { point: align, row },
+        None if !keep_clear.is_empty() && keep_clear.contains(align) => Anchor::Below(keep_clear),
         None => Anchor::Corner(align),
     };
     let at = if button.is_empty() { align } else { Point::new(button.x, button.mid_y()) };
@@ -424,8 +457,7 @@ impl Session {
         let Some(bar) = &self.bar else { return false };
         let (bar_impl, title) = (bar.impl_, &bar.titles[t]);
         let (index, rect) = (title.index, title.rect);
-        let main = msg!(Id; msg!(Id; class(c"NSApplication"), c"sharedApplication"), c"mainMenu");
-        let submenu = msg!(Id; msg!(Id; main, c"itemAtIndex:", index => isize), c"submenu");
+        let submenu = msg!(Id; title.item, c"submenu");
         if submenu.is_null() {
             return false;
         }
@@ -433,10 +465,8 @@ impl Session {
         open_lifecycle(impl_, submenu);
         let rows = model::rows(submenu, false, self.modifiers);
         // Hang from the bottom of the title, right up against the menu bar.
-        let mut screen = visible_frame(Point::new(rect.x, rect.y - 1.0));
-        screen.height += menus_core::layout::Metrics::default().screen_margin;
-        let Some(panel) = Panel::open(submenu, rows, Anchor::Corner(Point::new(rect.x, rect.y)), 0.0, screen, self.animation)
-        else {
+        let screen = visible_frame(Point::new(rect.x, rect.y - 1.0));
+        let Some(panel) = Panel::open(submenu, rows, Anchor::Below(rect), 0.0, screen, self.animation) else {
             log!("menu bar title {index} has nothing to show");
             close_lifecycle(impl_);
             return false;
