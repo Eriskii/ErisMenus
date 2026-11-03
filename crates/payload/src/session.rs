@@ -20,6 +20,7 @@ use menus_core::{Point, Rect};
 
 use crate::model::{self, Row};
 use crate::{log, msg};
+use eris_inject_payload::sys::SpinLock;
 use crate::objc::{Id, NIL, autoreleasing, class, nsstring, release, responds, retain, string};
 use crate::panel::Panel;
 use crate::sys::{self, CGPoint, CGRect};
@@ -49,13 +50,18 @@ pub fn active() -> bool {
     !ACTIVE.load(Ordering::Acquire).is_null()
 }
 
-pub fn cancel(_impl: Id) -> bool {
-    if ACTIVE.load(Ordering::Acquire).is_null() {
+/// `cancelTracking` on one of the menus we have open ends our tracking; on any other menu (the
+/// menu bar's own, say) it's left to AppKit.
+pub fn cancel(impl_: Id) -> bool {
+    if !OPEN.with(|open| open.contains(&(impl_ as usize))) {
         return false;
     }
     CANCELLED.store(true, Ordering::Release);
     true
 }
+
+/// The impls of the menus we have open.
+static OPEN: SpinLock<Vec<usize>> = SpinLock::new(Vec::new());
 
 pub fn highlighted(impl_: Id) -> Option<Id> {
     let active = ACTIVE.load(Ordering::Acquire);
@@ -74,10 +80,6 @@ pub fn present(impl_: Id, _view: Id, context: Id) -> bool {
     }
     let menu = msg!(Id; context, c"menu");
     if menu.is_null() {
-        return false;
-    }
-    if model::has_custom_views(menu) {
-        log!("leaving a menu with custom item views to AppKit");
         return false;
     }
     log!("drawing a menu of {} items", msg!(isize; menu, c"numberOfItems"));
@@ -103,6 +105,15 @@ struct Title {
     index: isize,
     /// On screen.
     rect: Rect,
+}
+
+impl Title {
+    /// Whether `p` is on this title. The top edge counts: the pointer sits on the screen's top row,
+    /// y = the screen's height, when it's pushed up against the menu bar.
+    fn hit(&self, p: Point) -> bool {
+        let r = self.rect;
+        p.x >= r.x && p.x < r.max_x() && p.y >= r.y && p.y <= r.max_y() + 1.0
+    }
 }
 
 /// Tracks the menu bar from `event` (the click on a title, or the key that focused the menu bar)
@@ -135,7 +146,7 @@ fn track_menu_bar_now(event: Id) -> bool {
         // Only a click that's really on a title. AppKit hands this handler other clicks too, and
         // its own idea of the title under the pointer only goes by x.
         let clicked = (!event.is_null()).then(|| click_location(event)).flatten();
-        [clicked, Some(mouse)].into_iter().flatten().find_map(|p| titles.iter().position(|t| t.rect.contains(p)))
+        [clicked, Some(mouse)].into_iter().flatten().find_map(|p| titles.iter().position(|t| t.hit(p)))
     };
     let Some(start) = start.filter(|_| !titles.is_empty()) else {
         if keyboard || titles.iter().any(|t| t.rect.x <= mouse.x && mouse.x < t.rect.max_x()) {
@@ -153,9 +164,6 @@ fn track_menu_bar_now(event: Id) -> bool {
     // On some paths AppKit has already opened the title's menu by now.
     if !msg!(Id; bar, c"deepestPresentedSubmenu").is_null() {
         msg!((); bar, c"dismissSubmenuAnimated:", false => bool);
-    }
-    if model::has_custom_views(msg!(Id; msg!(Id; menu, c"itemAtIndex:", titles[start].index => isize), c"submenu")) {
-        return false;
     }
     ACTIVE.store(bar, Ordering::Release);
     CANCELLED.store(false, Ordering::Release);
@@ -325,6 +333,7 @@ fn run(impl_: Id, menu: Id, context: Id) {
 }
 
 fn open_lifecycle(impl_: Id, menu: Id) {
+    OPEN.with(|open| open.push(impl_ as usize));
     for step in [c"_sendMenuPopulate", c"_sendMenuOpening", c"_sendMenuEnableItems"] {
         if responds(impl_, step) {
             msg!((); impl_, step);
@@ -336,6 +345,7 @@ fn open_lifecycle(impl_: Id, menu: Id) {
 }
 
 fn close_lifecycle(impl_: Id) {
+    OPEN.with(|open| open.retain(|&i| i != impl_ as usize));
     msg!((); impl_, c"setIsVisible:", false => bool);
     if responds(impl_, c"_sendMenuClosed") {
         msg!((); impl_, c"_sendMenuClosed");
@@ -405,7 +415,7 @@ impl Session {
 
     /// The menu bar title under `p`.
     fn title_at(&self, p: Point) -> Option<usize> {
-        self.bar.as_ref()?.titles.iter().position(|t| t.rect.contains(p))
+        self.bar.as_ref()?.titles.iter().position(|t| t.hit(p))
     }
 
     /// Opens the menu of menu bar title `t` in place of whatever's open; false if it has nothing
@@ -427,6 +437,7 @@ impl Session {
         screen.height += menus_core::layout::Metrics::default().screen_margin;
         let Some(panel) = Panel::open(submenu, rows, Anchor::Corner(Point::new(rect.x, rect.y)), 0.0, screen, self.animation)
         else {
+            log!("menu bar title {index} has nothing to show");
             close_lifecycle(impl_);
             return false;
         };
@@ -483,7 +494,7 @@ impl Session {
                 }
                 self.run_timers();
                 if CANCELLED.load(Ordering::Acquire) {
-                    self.done = true;
+                    self.finish("the app cancelled it");
                 }
                 let now = sys::now();
                 let dt = (now - last).min(1.0 / 30.0);
@@ -498,6 +509,9 @@ impl Session {
 
     fn handle(&mut self, app: Id, event: Id) {
         let kind = msg!(usize; event, c"type");
+        if self.forward_to_item_view(kind, event) {
+            return;
+        }
         match kind {
             k if MOUSE_DOWN.contains(&k) && !self.ignore_pointer => self.mouse_down(),
             k if MOUSE_UP.contains(&k) && !self.ignore_pointer => self.mouse_up(),
@@ -519,13 +533,45 @@ impl Session {
             }
             APPKIT_DEFINED => {
                 if msg!(i16; event, c"subtype") == APPLICATION_DEACTIVATED {
-                    self.done = true;
+                    self.finish("the app lost focus");
                 }
                 msg!((); app, c"sendEvent:", event => Id);
             }
             SYSTEM_DEFINED | APPLICATION_DEFINED => msg!((); app, c"sendEvent:", event => Id),
             _ => {}
         }
+    }
+
+    /// Hands a mouse event on an item that draws itself with a view (Finder's tag colors, say) to
+    /// that view, as AppKit's menus do.
+    fn forward_to_item_view(&mut self, kind: usize, event: Id) -> bool {
+        const MOUSE_MOVED: usize = 5;
+        const DRAGGED: [usize; 3] = [6, 7, 27];
+        if !MOUSE_DOWN.contains(&kind) && !MOUSE_UP.contains(&kind) && kind != MOUSE_MOVED && !DRAGGED.contains(&kind) {
+            return false;
+        }
+        let window = msg!(Id; event, c"window");
+        let Some(level) = self.levels.iter().find(|l| l.panel.window() == window) else { return false };
+        let target = level.panel.item_view_hit(msg!(CGPoint; event, c"locationInWindow"));
+        if target.is_null() {
+            return false;
+        }
+        // Straight to the view, as AppKit's menu windows do: our panel never becomes key, and a
+        // window that isn't key wouldn't pass a first click on.
+        let selector = match kind {
+            1 => c"mouseDown:",
+            2 => c"mouseUp:",
+            3 => c"rightMouseDown:",
+            4 => c"rightMouseUp:",
+            25 => c"otherMouseDown:",
+            26 => c"otherMouseUp:",
+            5 => c"mouseMoved:",
+            6 => c"mouseDragged:",
+            7 => c"rightMouseDragged:",
+            _ => c"otherMouseDragged:",
+        };
+        msg!((); target, selector, event => Id);
+        true
     }
 
     /// The deepest level whose body is under `p`.
@@ -605,14 +651,14 @@ impl Session {
         if let Some(t) = self.title_at(self.mouse) {
             // Clicking the open title closes its menu, as in AppKit.
             if self.bar.as_ref().is_some_and(|b| b.current == t) {
-                self.done = true;
+                self.finish("its title was clicked again");
             } else {
                 self.open_title(t, false);
             }
             return;
         }
         match self.level_at(self.mouse) {
-            None => self.done = true,
+            None => self.finish("a click outside it"),
             Some(l) => {
                 if let Some(r) = self.levels[l].panel.row_at(self.mouse) {
                     if self.levels[l].panel.selectable(r) && !self.levels[l].panel.rows[r].submenu().is_null() {
@@ -660,7 +706,7 @@ impl Session {
                     self.activate(active, r, true);
                 }
             }
-            53 => self.done = true,
+            53 => self.finish("Escape"),
             49 if self.typed.is_empty() || sys::now() - self.typed_at > TYPE_SELECT_RESET => {
                 if let Some(r) = highlighted {
                     self.activate(active, r, true);
@@ -716,6 +762,13 @@ impl Session {
             return;
         }
         self.chosen = panel.rows[r].item();
+        self.finish("an item was chosen");
+    }
+
+    fn finish(&mut self, why: &str) {
+        if !self.done {
+            log!("menu closed: {why}");
+        }
         self.done = true;
     }
 

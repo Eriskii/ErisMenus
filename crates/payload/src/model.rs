@@ -28,7 +28,12 @@ impl Row {
     }
 
     pub fn enabled(&self) -> bool {
-        self.kind == RowKind::Item && msg!(bool; self.item(), c"isEnabled")
+        self.kind == RowKind::Item && self.view().is_null() && msg!(bool; self.item(), c"isEnabled")
+    }
+
+    /// The view the item draws itself with, if it has one.
+    pub fn view(&self) -> Id {
+        if self.kind == RowKind::Item { msg!(Id; self.item(), c"view") } else { core::ptr::null_mut() }
     }
 
     pub fn submenu(&self) -> Id {
@@ -57,15 +62,6 @@ impl Drop for Row {
             release(item);
         }
     }
-}
-
-/// Whether any item that would show draws itself with a view, which we leave to AppKit.
-pub fn has_custom_views(menu: Id) -> bool {
-    let count = msg!(isize; menu, c"numberOfItems");
-    (0..count).any(|i| {
-        let item = msg!(Id; menu, c"itemAtIndex:", i => isize);
-        !msg!(bool; item, c"isHidden") && !msg!(Id; item, c"view").is_null()
-    })
 }
 
 /// The rows of `menu`, leaving out its first item if `skip_first` (a pull-down's title).

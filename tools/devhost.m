@@ -9,6 +9,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <dlfcn.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
 
 static NSString *out;
 
@@ -75,6 +76,10 @@ static void after(double seconds, dispatch_block_t block) {
 - (void)menuDidClose:(NSMenu *)m { printf("  delegate menuDidClose %s\n", m.title.UTF8String); }
 - (void)menu:(NSMenu *)m willHighlightItem:(NSMenuItem *)item { printf("  delegate willHighlight %s\n", item ? item.title.UTF8String : "(none)"); }
 - (BOOL)validateMenuItem:(NSMenuItem *)item { return ![item.title isEqualToString:@"Disabled by validation"]; }
+- (void)tag:(NSButton *)b {
+    printf("  TAG %s clicked in the item's own view\n", b.title.UTF8String);
+    [b.enclosingMenuItem.menu cancelTracking];
+}
 - (void)popupChanged:(NSPopUpButton *)b { printf("  POPUP ACTION now %s\n", b.titleOfSelectedItem.UTF8String); }
 
 - (NSMenuItem *)add:(NSMenu *)m title:(NSString *)title key:(NSString *)key mask:(NSEventModifierFlags)mask {
@@ -172,7 +177,8 @@ static void after(double seconds, dispatch_block_t block) {
         id representation = [bar performSelector:@selector(activeRepresentationView)];
         NSView *file = ((id (*)(id, SEL, long))objc_msgSend)(representation, sel_registerName("subviewAtMenuIndex:"), 1);
         NSRect r = [file convertRect:file.bounds toView:nil];
-        NSPoint at = NSMakePoint(file.window.frame.origin.x + NSMidX(r), file.window.frame.origin.y + NSMidY(r));
+        // On the screen's top row, where the pointer is when it's pushed up into the menu bar.
+        NSPoint at = NSMakePoint(file.window.frame.origin.x + NSMidX(r), NSMaxY(file.window.frame));
         NSEvent *click = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown location:at modifierFlags:0
                                            timestamp:0 windowNumber:0 context:nil eventNumber:0 clickCount:1 pressure:1];
         BOOL handled = ((BOOL (*)(id, SEL, id))objc_msgSend)([bar performSelector:@selector(trackingSession)], sel_registerName("_mouseDownEventHandler:"), click);
@@ -223,6 +229,30 @@ static void after(double seconds, dispatch_block_t block) {
                                            timestamp:0 windowNumber:0 context:nil eventNumber:0 clickCount:1 pressure:1];
         BOOL handled = ((BOOL (*)(id, SEL, id))objc_msgSend)([bar performSelector:@selector(trackingSession)], sel_registerName("_mouseDownEventHandler:"), click);
         printf("  stray click opened a menu: %d\n", handled);
+    } else if ([name isEqual:@"customview"]) {
+        // An item that draws itself with a view, like Finder's tag colors: shown in our panel, and
+        // a click on it goes to its button.
+        NSMenu *m = [self richMenu];
+        NSView *tags = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 240, 40)];
+        NSButton *red = [NSButton buttonWithTitle:@"Red" target:self action:@selector(tag:)];
+        red.frame = NSMakeRect(20, 6, 80, 28);
+        [tags addSubview:red];
+        NSMenuItem *row = [[NSMenuItem alloc] initWithTitle:@"Tags" action:nil keyEquivalent:@""];
+        row.view = tags;
+        [m insertItem:row atIndex:2];
+        after(0.5, ^{
+            snapshot(@"customview");
+            NSWindow *panel = red.window;
+            NSPoint at = [red convertPoint:NSMakePoint(NSMidX(red.bounds), NSMidY(red.bounds)) toView:nil];
+            for (NSNumber *type in @[ @(NSEventTypeLeftMouseDown), @(NSEventTypeLeftMouseUp) ]) {
+                NSEvent *e = [NSEvent mouseEventWithType:type.unsignedIntegerValue location:at modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime
+                                            windowNumber:panel.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
+                [NSApp postEvent:e atStart:NO];
+            }
+            printf("  the Tags view is in %s\n", class_getName(panel.class));
+        });
+        BOOL chosen = [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(200, 200) inView:self.window.contentView];
+        printf("  returned %d, Tags view still finds its item: %d\n", chosen, tags.enclosingMenuItem == row);
     } else if ([name isEqual:@"frames"]) {
         // The opening animation, frame by frame.
         for (int f = 0; f < 8; f++) after(0.02 + f * 0.035, ^{ snapshot([NSString stringWithFormat:@"frames-%02d", f]); });
@@ -244,7 +274,10 @@ int main(int argc, char **argv) {
         // Menus here are driven by keys alone; the pointer is whoever's at the desk.
         [NSUserDefaults.standardUserDefaults registerDefaults:@{@"ErisMenusIgnorePointer" : @YES}];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-        if (strcmp(argv[1], "-") != 0 && !dlopen(argv[1], RTLD_NOW)) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
+        // "--injected": the installed daemon loads ErisMenus into this app (run as an app bundle);
+        // wait until it has, and test what it loaded.
+        BOOL injected = strcmp(argv[1], "--injected") == 0;
+        if (!injected && strcmp(argv[1], "-") != 0 && !dlopen(argv[1], RTLD_NOW)) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
 
         Host *host = [Host new];
         NSMenu *main = [[NSMenu alloc] initWithTitle:@""];
@@ -278,8 +311,25 @@ int main(int argc, char **argv) {
         NSMutableArray *scenarios = [NSMutableArray array];
         for (int i = 3; i < argc; i++) [scenarios addObject:@(argv[i])];
         if (scenarios.count == 0)
-            [scenarios addObjectsFromArray:@[ @"context", @"submenu", @"positioning", @"escape", @"popup", @"pulldown", @"textview", @"cancel", @"menubar", @"menubar-click", @"menubar-monitor", @"menubar-stray" ]];
-        after(0.5, ^{ [host run:scenarios index:0]; });
+            [scenarios addObjectsFromArray:@[ @"context", @"submenu", @"positioning", @"escape", @"popup", @"pulldown", @"textview", @"cancel", @"menubar", @"menubar-click", @"menubar-monitor", @"menubar-stray", @"customview" ]];
+        if (injected) {
+            __block int waited = 0;
+            __block void (^wait)(void);
+            wait = ^{
+                if (objc_getClass("ErisMenusLoaded")) {
+                    printf("loaded by the daemon after %.1fs\n", waited / 10.0);
+                    after(0.5, ^{ [host run:scenarios index:0]; });
+                } else if (++waited > 200) {
+                    printf("the daemon never loaded ErisMenus\n");
+                    exit(1);
+                } else {
+                    after(0.1, wait);
+                }
+            };
+            after(0.1, wait);
+        } else {
+            after(0.5, ^{ [host run:scenarios index:0]; });
+        }
         [NSApp run];
     }
 }

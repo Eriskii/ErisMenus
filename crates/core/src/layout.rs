@@ -80,6 +80,8 @@ pub struct RowSpec {
     pub has_state: bool,
     pub indent: usize,
     pub submenu: bool,
+    /// An item that draws itself with a view of this size, across the menu's full width.
+    pub custom: Option<Size>,
 }
 
 impl RowSpec {
@@ -98,7 +100,12 @@ impl RowSpec {
             has_state: false,
             indent: 0,
             submenu: false,
+            custom: None,
         }
+    }
+
+    pub fn custom(size: Size) -> Self {
+        Self { custom: Some(size), ..Self::item(0.0) }
     }
 }
 
@@ -201,13 +208,19 @@ pub fn lay_out(rows: &[RowSpec], m: &Metrics, min_width: f64, max_width: f64, ma
     if any(|r| r.submenu) {
         trailing = trailing.max(m.key_gap + m.chevron_width);
     }
-    let width = math::ceil(title_x + text + trailing + m.text_inset + m.inset).max(min_width).max(m.min_width).min(max_width);
+    let custom = rows.iter().filter_map(|r| r.custom).map(|s| s.width).fold(0.0, f64::max);
+    let width = math::ceil(title_x + text + trailing + m.text_inset + m.inset)
+        .max(custom)
+        .max(min_width)
+        .max(m.min_width)
+        .min(max_width);
 
     let mut top = m.padding;
     let frames = rows
         .iter()
         .map(|r| {
             let height = match r.kind {
+                _ if r.custom.is_some() => r.custom.map_or(0.0, |s| s.height),
                 RowKind::Separator => m.separator_height,
                 RowKind::Header => m.header_height,
                 RowKind::Item if r.has_subtitle => m.subtitle_row_height,
@@ -347,6 +360,14 @@ mod tests {
         assert_eq!(l.row_at(Point::new(-1.0, 20.0), 0.0), None);
         let r = l.row_rect(3, 0.0);
         assert_eq!(l.row_at(Point::new(20.0, r.mid_y()), 0.0), Some(3));
+    }
+
+    #[test]
+    fn a_custom_view_sets_its_rows_height_and_can_widen_the_menu() {
+        let rows = [RowSpec::item(40.0), RowSpec::custom(Size::new(300.0, 52.0))];
+        let l = lay_out(&rows, &Metrics::default(), 0.0, 900.0, 2000.0);
+        assert_eq!(l.rows[1].height, 52.0);
+        assert_eq!(l.size.width, 300.0);
     }
 
     #[test]

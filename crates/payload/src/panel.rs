@@ -14,7 +14,7 @@ use crate::model::Row;
 use crate::msg;
 use crate::objc::{Id, NIL, class, ns, nsstring, release, retain, sel, utf16};
 use crate::style::{self, palette};
-use crate::sys::{self, CGColorRef, CGPathRelease, CGRect, CGSize, rect};
+use crate::sys::{self, CGColorRef, CGPathRelease, CGPoint, CGRect, CGSize, rect};
 
 /// Room around the body for its shadow.
 const MARGIN: f64 = 28.0;
@@ -53,6 +53,13 @@ pub struct Panel {
     pub highlighted: Option<usize>,
     pub scroll: f64,
     window: Id,
+    /// The window's content view: the layer-hosting view that draws the menu, and above it the
+    /// views of items that draw themselves.
+    container: Id,
+    /// (row, the AppKit view holding its item's view), for items that draw themselves with views:
+    /// the item's `NSMenuItemViewer`, which keeps the view at its origin and is how the view finds
+    /// its item (`enclosingMenuItem`); retained.
+    item_views: Vec<(usize, Id)>,
     root: Id,
     body: Id,
     mask: Id,
@@ -101,13 +108,18 @@ impl Panel {
         let window = new_window(window_frame);
         let scale = msg!(f64; window, c"backingScaleFactor");
         let root = new_layer(c"CALayer");
-        msg!((); root, c"setBounds:", rect(0.0, 0.0, window_frame.size.width, window_frame.size.height) => CGRect);
+        let bounds = rect(0.0, 0.0, window_frame.size.width, window_frame.size.height);
+        msg!((); root, c"setBounds:", bounds => CGRect);
+        let container = msg!(Id; class(c"NSView"), c"alloc");
+        let container = msg!(Id; container, c"initWithFrame:", bounds => CGRect);
+        msg!((); container, c"setWantsLayer:", true => bool);
         let view = msg!(Id; class(c"NSView"), c"alloc");
-        let view = msg!(Id; view, c"initWithFrame:", rect(0.0, 0.0, window_frame.size.width, window_frame.size.height) => CGRect);
+        let view = msg!(Id; view, c"initWithFrame:", bounds => CGRect);
         msg!((); view, c"setLayer:", root => Id);
         msg!((); view, c"setWantsLayer:", true => bool);
-        msg!((); window, c"setContentView:", view => Id);
+        msg!((); container, c"addSubview:", view => Id);
         release(view);
+        msg!((); window, c"setContentView:", container => Id);
 
         let p = palette();
         let body = new_layer(c"CAShapeLayer");
@@ -145,6 +157,8 @@ impl Panel {
             highlighted: None,
             scroll: 0.0,
             window,
+            container,
+            item_views: Vec::new(),
             root,
             body,
             mask,
@@ -165,9 +179,51 @@ impl Panel {
         panel.height.animate(frame.height);
         panel.reveal.animate(1.0);
         panel.build_rows();
+        panel.adopt_item_views();
         panel.render();
         msg!((); window, c"orderFrontRegardless");
         Some(panel)
+    }
+
+    pub fn window(&self) -> Id {
+        self.window
+    }
+
+    /// The view of the item under `p` (on screen), for items that draw themselves.
+    pub fn item_view_at(&self, p: Point) -> Option<Id> {
+        let row = self.row_at(p)?;
+        self.item_views.iter().find(|&&(r, _)| r == row).map(|&(_, v)| v)
+    }
+
+    /// The view under `p` (in window coordinates) inside an item's own view, for sending it mouse
+    /// events; NIL when `p` isn't on one.
+    pub fn item_view_hit(&self, p: CGPoint) -> Id {
+        let origin = msg!(CGRect; self.window, c"frame").origin;
+        if self.item_view_at(Point::new(origin.x + p.x, origin.y + p.y)).is_none() {
+            return NIL;
+        }
+        msg!(Id; self.container, c"hitTest:", p => CGPoint)
+    }
+
+    /// Moves the views of items that draw themselves into our window, as AppKit's menus do.
+    fn adopt_item_views(&mut self) {
+        for row in 0..self.rows.len() {
+            let view = self.rows[row].view();
+            if view.is_null() {
+                continue;
+            }
+            let item = self.rows[row].item();
+            let viewer = if msg!(bool; item, c"respondsToSelector:", sel(c"_menuItemViewer") => *const core::ffi::c_void) {
+                msg!(Id; item, c"_menuItemViewer")
+            } else {
+                NIL
+            };
+            // Without AppKit's holder the view itself goes in, and can't find its item.
+            let holder = retain(if viewer.is_null() { view } else { viewer });
+            msg!((); holder, c"removeFromSuperview");
+            msg!((); self.container, c"addSubview:", holder => Id);
+            self.item_views.push((row, holder));
+        }
     }
 
     pub fn contains(&self, p: Point) -> bool {
@@ -250,6 +306,10 @@ impl Panel {
 
     /// Fades the panel out and lets it go.
     pub fn close(self, fade: bool) {
+        // Item views go back to their items right away, so the menu can show them again.
+        for &(_, holder) in &self.item_views {
+            msg!((); holder, c"removeFromSuperview");
+        }
         if fade {
             let context = class(c"NSAnimationContext");
             msg!((); context, c"beginGrouping");
@@ -293,6 +353,14 @@ impl Panel {
         msg!((); self.highlight, c"setOpacity:", self.highlight_alpha.value.clamp(0.0, 1.0) as f32 => f32);
 
         msg!((); catransaction, c"commit");
+
+        // Item views show once the body has mostly unrolled, and scroll with the rows.
+        for &(row, view) in &self.item_views {
+            let r = self.layout.row_rect(row, self.scroll);
+            let visible = self.reveal.value > 0.6 && r.y >= 0.0 && r.max_y() <= full_h;
+            msg!((); view, c"setFrame:", rect(MARGIN, MARGIN + r.y, full_w, r.height) => CGRect);
+            msg!((); view, c"setHidden:", !visible => bool);
+        }
     }
 
     fn build_rows(&mut self) {
@@ -312,6 +380,10 @@ impl Panel {
         }
         let mut layers = RowLayers::NONE;
         let row = &self.rows[i];
+        if !row.view().is_null() {
+            self.row_layers[i] = layers;
+            return;
+        }
         let m = self.layout.metrics;
         let cols = self.layout.columns;
         let f = self.layout.rows[i];
@@ -463,7 +535,10 @@ impl Drop for Panel {
                 release(l);
             }
         }
-        for l in [self.highlight, self.content, self.mask, self.body, self.root, self.font, self.menu] {
+        for &(_, view) in &self.item_views {
+            release(view);
+        }
+        for l in [self.highlight, self.content, self.mask, self.body, self.root, self.font, self.menu, self.container] {
             release(l);
         }
         release(self.window);
@@ -472,6 +547,11 @@ impl Drop for Panel {
 
 /// What row `row` needs room for, across all its variants.
 fn measure(row: &Row, font: Id) -> RowSpec {
+    let view = row.view();
+    if !view.is_null() {
+        let frame = msg!(CGRect; view, c"frame");
+        return RowSpec::custom(menus_core::Size::new(frame.size.width, frame.size.height));
+    }
     let mut spec = RowSpec { kind: row.kind, ..RowSpec::item(0.0) };
     match row.kind {
         RowKind::Separator => {}
@@ -544,5 +624,8 @@ fn new_window(frame: CGRect) -> Id {
     msg!((); window, c"setAnimationBehavior:", NO_ANIMATION => isize);
     msg!((); window, c"setCollectionBehavior:", ALL_SPACES_TRANSIENT_FULL_SCREEN => usize);
     msg!((); window, c"setFrame:display:", frame => CGRect, false => bool);
+    // Items that draw themselves do so on our black, so in dark mode.
+    let dark = msg!(Id; class(c"NSAppearance"), c"appearanceNamed:", nsstring(c"NSAppearanceNameDarkAqua") => Id);
+    msg!((); window, c"setAppearance:", dark => Id);
     window
 }
