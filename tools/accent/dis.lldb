@@ -1,0 +1,7 @@
+settings set auto-confirm true
+br set -n NSApplicationMain
+br set -n "-[NSApplication run]"
+br set -s board -n main
+run
+disassemble -n "-[NSCompositeAppearance _updateSystemTintColor]"
+quit

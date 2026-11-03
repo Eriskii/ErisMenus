@@ -1,0 +1,6 @@
+settings set auto-confirm true
+command script import bt.py
+br set -n NSColorGetUserAccentColor
+br command add -F bt.cb 1
+run
+quit
