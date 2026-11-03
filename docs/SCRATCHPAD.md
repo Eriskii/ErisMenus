@@ -15,7 +15,10 @@ this, then `architecture.md`, `appkit-internals.md` and `testing.md`. Keep it cu
   - `Eriskii/ErisMenus`, the monorepo's `apps/ErisMenus` submodule;
   - `Eriskii/ErisMacInjectLib`, the monorepo's `libs/ErisMacInjectLib` submodule;
   - `Eriskii/apple-sharpenerer` (outside the monorepo, at `../apple-sharpenerer`), which also loads
-    through the lib, by a local path dependency (`../ErisMonorepo/libs/ErisMacInjectLib`);
+    through the lib;
+  - both depend on the lib by git tag (`v0.1.0`), as every Eris Rust project does; inside the
+    monorepo `.cargo/config.toml` patches it to `libs/ErisMacInjectLib`. A lib change both need is a
+    new tag;
   - `Eriskii/ErisMonorepo` records both submodules.
 - 13 devhost scenarios pass; `menus-core` has 24 unit tests; the lib has 5.
 
@@ -78,6 +81,4 @@ this, then `architecture.md`, `appkit-internals.md` and `testing.md`. Keep it cu
 - Accessibility (VoiceOver) for our panels: none.
 - Settings: animation style and colors are compiled in (`Style::default()`, `style.rs`); a config
   like ErisDock's (`~/.config/…`, Darwin-notify hot reload as sharpenerer does) would fit.
-- apple-sharpenerer's path dependency on the lib: switch to a git dependency so its repo builds
-  on its own.
 - Possibly someday: the out-of-process route (TrustedUIService), see `appkit-internals.md`.

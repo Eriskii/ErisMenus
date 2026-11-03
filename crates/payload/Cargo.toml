@@ -14,4 +14,4 @@ test = false
 
 [dependencies]
 menus-core = { path = "../core" }
-eris-inject-payload = { path = "../../../../libs/ErisMacInjectLib/crates/payload" }
+eris-inject-payload = { git = "https://github.com/Eriskii/ErisMacInjectLib", tag = "v0.1.0" }

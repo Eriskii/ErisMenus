@@ -83,8 +83,8 @@ running get ErisMenus once relaunched, or right away with `sudo erismenus inject
 
 ## Building and trying it
 
-Needs the Xcode command line tools, rustup (the pinned nightly toolchain installs itself), and
-ErisMacInjectLib at `../../libs/ErisMacInjectLib`.
+Needs the Xcode command line tools and rustup (the pinned nightly toolchain installs itself). Cargo
+gets ErisMacInjectLib from GitHub, or from `libs/ErisMacInjectLib` inside ErisMonorepo.
 
 ```sh
 make            # target/dist/{erismenus,eris-inject-thread,liberismenus.dylib}

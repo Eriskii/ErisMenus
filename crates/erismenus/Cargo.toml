@@ -9,5 +9,5 @@ publish = false
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-eris-inject = { path = "../../../../libs/ErisMacInjectLib/crates/inject" }
+eris-inject = { git = "https://github.com/Eriskii/ErisMacInjectLib", tag = "v0.1.0" }
 libc = "0.2"

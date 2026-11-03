@@ -1,7 +1,8 @@
 CARGO   ?= cargo
 OUT     := target/dist
 NIGHTLY := -Zbuild-std=core,alloc
-INJECT  := ../../libs/ErisMacInjectLib
+# ErisMacInjectLib as cargo resolves it: the monorepo's libs/ checkout, or the git dependency.
+INJECT   = $(shell $(CARGO) metadata --format-version 1 | perl -ne 'print $$1 and exit if m{"manifest_path":"([^"]*)/crates/inject/Cargo.toml"}')
 
 export MACOSX_DEPLOYMENT_TARGET := 26.0
 
