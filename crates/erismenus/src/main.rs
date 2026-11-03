@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use eris_inject::daemon::{self, Client};
+use eris_inject::procs::{self, App, Kind};
 use eris_inject::inject::{self, Payload};
 use eris_inject::launchd::Service;
 
@@ -38,6 +39,8 @@ enum Command {
     Uninstall,
     /// Show whether the daemon is running.
     Status,
+    /// List the running processes the daemon loads into (or would).
+    Targets,
     /// Load into one running app right now (needs root).
     Inject {
         pid: i32,
@@ -55,11 +58,34 @@ fn payload(path: &Path) -> Payload<'_> {
     Payload { path, name: NAME, patches: &[] }
 }
 
+/// Never loaded into: the login window and the password prompt hold secrets, and the Dock is
+/// yabai's to load into.
+const SKIPPED: &[&str] = &["com.apple.loginwindow", "com.apple.SecurityAgent", "com.apple.dock"];
+
+/// Everything that can show an AppKit menu: regular apps, agents (menu bar extras, login items,
+/// ErisDock), system UI, app extensions, and the XPC services that run AppKit's app loop (open and
+/// save panels, System Settings panes). Not background-only processes, nor the helper apps
+/// browsers and Electron keep in their Frameworks folders, which never show AppKit menus. In a
+/// process that never makes an NSApplication, the payload hooks nothing.
+fn shows_menus(app: &App) -> bool {
+    match app.kind {
+        Kind::Background => false,
+        Kind::Service => true,
+        Kind::Regular | Kind::Agent | Kind::Extension => {
+            !(app.nested && app.in_frameworks && app.kind != Kind::Extension) && !SKIPPED.contains(&app.id.as_str())
+        }
+    }
+}
+
 struct Menus {
     payload: PathBuf,
 }
 
 impl Client for Menus {
+    fn wants(&mut self, app: &App, _home: &Path) -> bool {
+        shows_menus(app)
+    }
+
     fn load(&mut self, pid: i32, _bundle_id: &str) -> Result<(), inject::Error> {
         inject::inject(pid, &payload(&self.payload))
     }
@@ -87,6 +113,23 @@ fn run(command: Command) -> Result<(), String> {
                 (_, Some(pid)) => println!("daemon: running (pid {pid})"),
                 (true, None) => println!("daemon: installed but not running; see {}", SERVICE.log),
                 (false, None) => println!("daemon: not installed (sudo erismenus install)"),
+            }
+            Ok(())
+        }
+        Command::Targets => {
+            let me = unsafe { libc::getuid() };
+            let mut rows: Vec<(String, i32, &str)> = Vec::new();
+            for pid in procs::all_pids() {
+                let Some(app) = procs::owner(pid).filter(|&uid| uid == me).and(procs::executable(pid)).and_then(|exe| procs::app(&exe))
+                else {
+                    continue;
+                };
+                let verdict = if shows_menus(&app) { "yes" } else { "no" };
+                rows.push((app.id, pid, verdict));
+            }
+            rows.sort();
+            for (id, pid, verdict) in rows {
+                println!("{verdict:4}{pid:>7}  {id}");
             }
             Ok(())
         }

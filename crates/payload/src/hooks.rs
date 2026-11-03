@@ -7,8 +7,14 @@ use core::ffi::CStr;
 
 use crate::objc::{self, Id, Imp, Original, Sel, class, define_class, swizzle, swizzle_class};
 
-/// A class only we define, so a second copy of the payload can tell it's not the first.
+/// A class every copy of us defines, so a copy can tell another is already here.
 const LOADED_MARKER: &core::ffi::CStr = c"ErisMenusLoaded";
+
+/// A class only this build defines.
+fn build_marker() -> &'static CStr {
+    const NAME: &str = concat!("ErisMenusBuild", env!("ERISMENUS_BUILD"), "\0");
+    CStr::from_bytes_with_nul(NAME.as_bytes()).unwrap_or(c"ErisMenusBuild")
+}
 use crate::{log, msg, session};
 
 /// `+[NSContextMenuImpl presentPopup:fromView:withContext:animated:]`: everything a popped-up menu
@@ -134,10 +140,17 @@ impl Hook {
 /// Replaces AppKit's menu methods with ours. Run on the main thread once the app is up. False if
 /// we were already installed, or AppKit lacks the menu presentation we replace.
 pub fn install() -> bool {
-    // Another copy of us may already be in this app (the daemon restarted, say): it has the menus.
-    if INSTALLED.swap(true, Ordering::AcqRel) || define_class(LOADED_MARKER, c"NSObject", &[]).is_null() {
+    if INSTALLED.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+    // Another copy may already be here (the daemon restarted, say). The same build has the menus
+    // already; an older one gets hooked over, so an update reaches apps without relaunching them.
+    if define_class(build_marker(), c"NSObject", &[]).is_null() {
         log!("already running");
         return false;
+    }
+    if define_class(LOADED_MARKER, c"NSObject", &[]).is_null() {
+        log!("taking over from an older build");
     }
     let hooks = hooks();
     if !hooks[0].apply() {

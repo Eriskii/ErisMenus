@@ -38,9 +38,30 @@ fn start(injected: bool) {
         unsafe { rt::usleep(50_000) };
         waited += 50;
     }
-    // Hooks go in on the main thread, once the app is running: the daemon starts us while the
-    // app is still starting up.
+    // Only processes that become apps show menus; plenty of others link AppKit and never do. The
+    // daemon starts us while the app is still starting up, so give it a while.
+    // (Loaded by dyld, we're on the main thread before the app exists; the main queue waits for it.)
+    let mut waited = 0;
+    while injected && !has_app() {
+        if waited >= 30_000 {
+            log!("no NSApplication in pid {pid}; nothing to do");
+            return;
+        }
+        unsafe { rt::usleep(100_000) };
+        waited += 100;
+    }
+    // Hooks go in on the main thread, once the app is running.
     eris_inject_payload::sys::on_main(install);
+}
+
+/// Whether AppKit's `NSApp` has been made.
+fn has_app() -> bool {
+    unsafe extern "C" {
+        fn dlsym(handle: *mut core::ffi::c_void, symbol: *const core::ffi::c_char) -> *mut core::ffi::c_void;
+    }
+    const RTLD_DEFAULT: *mut core::ffi::c_void = -2isize as *mut core::ffi::c_void;
+    let app = unsafe { dlsym(RTLD_DEFAULT, c"NSApp".as_ptr()) } as *const objc::Id;
+    !app.is_null() && !unsafe { core::ptr::read_volatile(app) }.is_null()
 }
 
 extern "C" fn install(_: *mut core::ffi::c_void) {
