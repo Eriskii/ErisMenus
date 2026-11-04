@@ -6,6 +6,9 @@ this, then `architecture.md`, `appkit-internals.md` and `testing.md`. Keep it cu
 
 ## State (2026-11-03, evening)
 
+- **Next job: [`HANDOFF-ErisMacShell.md`](HANDOFF-ErisMacShell.md)**, merging this and ErisDock into
+  ErisMacShell and moving the colors to CustomMacColors. Read it first. Newer than the rest of this
+  section: everything below is installed, and the icon tint save is confirmed working.
 - **Installed and confirmed by the user**: menus everywhere (context, pop-up/pull-down, menu bar,
   Apple menu, menu bar extras), glass painted over including Control Center's modules, which look
   and open like our menus. Installed build: lib 0.1.2 (`d9f00c5` era).
